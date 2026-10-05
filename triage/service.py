@@ -76,7 +76,9 @@ _STEP = {Severity.LOW: 0, Severity.MEDIUM: 1, Severity.HIGH: 2, Severity.CRITICA
 
 _IPV4 = re.compile(r"(?<!\d)(?<!\d\.)\d{1,3}(?:\.\d{1,3}){3}(?!\.?\d)")
 _IPV6 = re.compile(r"(?<![\w:])(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}(?![\w:])")
-_FILE = re.compile(r"(?<![\w.-])[\w-]+(?:\.[\w-]+)*\.(?:exe|dll|sys|ps1|psm1|bat|cmd|vbs|vbe|js|jse|wsf|hta|"
+# No bare "js": "Node.js" in an explanation would read as an invented file and
+# needlessly push an alert to "get help".
+_FILE = re.compile(r"(?<![\w.-])[\w-]+(?:\.[\w-]+)*\.(?:exe|dll|sys|ps1|psm1|bat|cmd|vbs|vbe|jse|wsf|hta|"
                    r"scr|msi|lnk|jar)(?!\w)", re.IGNORECASE)
 
 
@@ -100,8 +102,10 @@ def _unverified_references(alert: NormalizedAlert, result: TriageResult) -> list
     written = f"{result.explanation}\n{result.recommended_action}"
     known_addresses = _addresses(seen)
     missing = [str(address) for address in _addresses(written) - known_addresses]
-    lowered = seen.lower()
-    missing += [name for name in dict.fromkeys(_FILE.findall(written)) if name.lower() not in lowered]
+    # Whole names, not substrings: "svchost.exe" must not pass because the
+    # evidence contains "notsvchost.exe".
+    known_files = {name.lower() for name in _FILE.findall(seen)}
+    missing += [name for name in dict.fromkeys(_FILE.findall(written)) if name.lower() not in known_files]
     return missing
 
 

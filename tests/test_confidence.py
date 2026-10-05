@@ -134,6 +134,19 @@ def test_references_the_model_was_shown_are_fine():
     assert confidence == Confidence.HIGH and reasons == []
 
 
+def test_a_file_name_must_match_whole_not_as_a_substring():
+    alert = clean_alert(raw={**SCAN_RAW, "process": {"image": "C:\\Temp\\notsvchost.exe"}})
+    confidence, reasons = apply_confidence_cap(alert, result(explanation="It started svchost.exe."))
+    assert confidence == Confidence.LOW and "unverified_reference" in codes(reasons)
+    fine, _ = apply_confidence_cap(alert, result(explanation="notsvchost.exe started a scan."))
+    assert fine == Confidence.HIGH
+
+
+def test_node_js_is_not_an_invented_file():
+    confidence, _ = apply_confidence_cap(clean_alert(), result(explanation="A Node.js tool at 192.168.1.25 scanned."))
+    assert confidence == Confidence.HIGH
+
+
 def test_unverified_reference_in_the_recommended_action_counts_too():
     confidence, reasons = apply_confidence_cap(clean_alert(), result(recommended_action="Block 203.0.113.9."))
     assert confidence == Confidence.LOW and "unverified_reference" in codes(reasons)

@@ -191,7 +191,9 @@ function AlertItem({ alert, showStatus, canSeeEvidence, act, ask, evidence }: {
 }) {
   const isOpen = alert.status === 'open';
   const tier = tierOf(alert);
-  const guidance = GUIDANCE[tier];
+  /* Only while the alert is open: a resolved alert telling the owner to call for
+     help "now" is noise. Reopening it brings the banner back. */
+  const guidance = isOpen ? GUIDANCE[tier] : undefined;
   const confidence = CONFIDENCE_LABEL[alert.confidence || 'low'] || CONFIDENCE_LABEL.low;
   return (
     <details className="alert">
@@ -458,7 +460,8 @@ function Advanced({ selected }: { selected: any }) {
         <p className="muted">{selected.triage?.reasoning || 'No additional reasoning provided.'}</p>
         <h3>Confidence</h3>
         <p className="muted">
-          Final: {selected.triage?.confidence || '—'} · Model’s own: {selected.triage?.model_confidence || 'none (no model output)'} · Guidance: {selected.triage?.guidance_tier || '—'}
+          Final: {selected.triage?.confidence || '—'} · Model’s own: {selected.triage?.model_confidence
+            || (selected.triage?.confidence_reasons?.some?.((reason: { code: string }) => reason.code === 'model_unavailable') ? 'none (no model output)' : 'not recorded')} · Guidance: {selected.triage?.guidance_tier || '—'}
         </p>
         <table className="list">
           <tbody>
