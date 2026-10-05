@@ -1,4 +1,4 @@
-export type Alert = { id:number; source:string; timestamp:string; title:string; source_ip?:string; destination_ip?:string; status:string; duplicate_count:number; severity:string; explanation:string; recommended_action:string };
+export type Alert = { id:number; source:string; timestamp:string; title:string; source_ip?:string; destination_ip?:string; status:string; duplicate_count:number; severity:string; confidence?:string; guidance_tier?:string; explanation:string; recommended_action:string };
 export type Session = { token:string; username:string; role:'owner'|'analyst'|'admin'; must_change_password?:boolean };
 /* Corrupt localStorage must never white-screen the appliance: parse defensively, drop the bad key, carry on with the fallback. */
 export function safeParse<T>(key:string, fallback:T, valid?:(value:unknown)=>boolean):T { try { const raw=localStorage.getItem(key); if(raw===null) return fallback; const parsed=JSON.parse(raw) as unknown; if(valid && !valid(parsed)) throw new Error(`unexpected shape stored at ${key}`); return parsed as T; } catch { try { localStorage.removeItem(key); } catch {} return fallback; } }

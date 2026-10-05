@@ -14,6 +14,42 @@ const AI_NOTE = 'Written on this appliance and checked against the alert schema.
 /* Chat has no endpoint yet; the local model is wired up once its evaluation lands. */
 const PLACEHOLDER_REPLY = 'Chat will run on the local AI model once its evaluation is complete. Until then, open an alert for the explanation and steps LightHouse has already written for it.';
 
+/* Fixed wording per guidance tier. The server picks the tier from the floored
+   severity and the capped confidence; none of this text comes from the model or
+   the alert, so nothing an attacker writes into an alert can remove or soften it.
+   No sensor fields (device, address) are interpolated for the same reason. */
+type Guidance = { eyebrow: string; headline: string; body?: string; steps?: { lead: string; rest: string }[] };
+const GUIDANCE: Record<string, Guidance> = {
+  caution: {
+    eyebrow: 'Double-check',
+    headline: 'LightHouse is fairly confident about this, but please double-check before acting.',
+    steps: [{ lead: 'Check first:', rest: 'ask whoever uses this device whether they expected this activity at this time. If nobody did, treat the alert as real.' }],
+  },
+  review: {
+    eyebrow: 'Needs a second opinion',
+    headline: 'LightHouse isn’t sure about this one.',
+    body: 'The explanation below may be wrong, in either direction. Before you change anything, have someone technical (your IT provider or a tech-savvy colleague) look at this alert. Leave it open until they have.',
+  },
+  get_help: {
+    eyebrow: 'Get help now',
+    headline: 'Contact your IT provider or a security professional now.',
+    body: 'This could be serious, and LightHouse can’t be sure what happened. Call your IT provider, a managed security provider or an incident-response firm, and tell them about this alert. While you wait:',
+    steps: [
+      { lead: 'Don’t delete files, programs or logs.', rest: 'Whoever investigates will need them.' },
+      { lead: 'Don’t reply to, contact or pay anyone demanding money.', rest: '' },
+      { lead: 'Write down what you saw:', rest: 'the time, anything on screen, and anything unusual.' },
+      { lead: 'Disconnect the affected device from the network', rest: '(unplug its cable or turn off its Wi-Fi) if that won’t stop critical work. Leave it switched on.' },
+    ],
+  },
+};
+const CONFIDENCE_LABEL: Record<string, string> = { high: 'High confidence', medium: 'Medium confidence', low: 'Low confidence' };
+const capitalised = (text: string) => text ? text[0].toUpperCase() + text.slice(1) : text;
+/* An alert without a tier predates the server change; treat it as unchecked. */
+const tierOf = (alert: Alert) => alert.guidance_tier || 'review';
+const needsHelp = (alert: Alert) => alert.status === 'open' && tierOf(alert) === 'get_help';
+/* Open get-help alerts first, everything else in the server's (newest-first) order. */
+const helpFirst = (alerts: Alert[]) => [...alerts.filter(needsHelp), ...alerts.filter(alert => !needsHelp(alert))];
+
 const detailOf = (error: unknown, fallback: string) => {
   const raw = error instanceof Error ? error.message : '';
   try { const parsed = JSON.parse(raw); return typeof parsed?.detail === 'string' ? parsed.detail : fallback; } catch { return fallback; }
@@ -154,12 +190,16 @@ function AlertItem({ alert, showStatus, canSeeEvidence, act, ask, evidence }: {
   act: (id: number, status: string) => void; ask: (question: string) => void; evidence: (alert: Alert) => void;
 }) {
   const isOpen = alert.status === 'open';
+  const tier = tierOf(alert);
+  const guidance = GUIDANCE[tier];
+  const confidence = CONFIDENCE_LABEL[alert.confidence || 'low'] || CONFIDENCE_LABEL.low;
   return (
     <details className="alert">
       <summary>
         <span className={`dot ${alert.severity}`} />
         <div>
-          <span className={`sev ${alert.severity}`}>{alert.severity}</span>
+          <span className={`sev ${alert.severity}`}>{capitalised(alert.severity)} severity · {confidence}</span>
+          {needsHelp(alert) && <span className="pill get_help">Get help now</span>}
           {showStatus && <span className="pill">{alert.status}</span>}
           <b>{alert.title}</b>
           <p>{alert.explanation}</p>
@@ -168,10 +208,22 @@ function AlertItem({ alert, showStatus, canSeeEvidence, act, ask, evidence }: {
         <span className="chev" aria-hidden="true">▾</span>
       </summary>
       <div className="detail">
+        {guidance && (
+          <div className={`guidance ${tier}`}>
+            <p className="eyebrow">{guidance.eyebrow}</p>
+            <strong>{guidance.headline}</strong>
+            {guidance.body && <p>{guidance.body}</p>}
+            {guidance.steps && (tier === 'get_help'
+              ? <ol>{guidance.steps.map((step, index) => <li key={index}><b>{step.lead}</b>{step.rest && ` ${step.rest}`}</li>)}</ol>
+              : guidance.steps.map((step, index) => <p key={index}><b>{step.lead}</b> {step.rest}</p>))}
+          </div>
+        )}
         <p className="eyebrow">What this means</p>
         <p>{alert.explanation}</p>
         {steps(alert.recommended_action).length > 0 && <>
-          <p className="eyebrow">Recommended steps</p>
+          {/* For get-help alerts the professional comes first; the model's own
+              suggestion is kept, but demoted below the fixed guidance. */}
+          <p className="eyebrow">{tier === 'get_help' ? 'LightHouse’s suggestion — check with your IT provider first' : 'Recommended steps'}</p>
           <ol>{steps(alert.recommended_action).map((step, index) => <li key={index}><b>{step.lead}</b>{step.rest && ` ${step.rest}`}</li>)}</ol>
         </>}
         <div className="actions">
@@ -216,7 +268,7 @@ function Home({ alerts, canSeeEvidence, act, ask, evidence }: PageProps) {
       </section>
       <section className="recent">
         <div className="head"><p className="eyebrow">Recent activity</p><h2>Latest alerts</h2></div>
-        {alerts.slice(0, 4).map(alert => <AlertItem key={alert.id} alert={alert} canSeeEvidence={canSeeEvidence} act={act} ask={ask} evidence={evidence} />)}
+        {helpFirst(alerts).slice(0, 4).map(alert => <AlertItem key={alert.id} alert={alert} canSeeEvidence={canSeeEvidence} act={act} ask={ask} evidence={evidence} />)}
         {!alerts.length && <div className="empty-state"><b>Nothing to review</b><p>No alerts yet. Run fixture replay to seed the local demo.</p></div>}
       </section>
       <section className="common-questions">
@@ -257,7 +309,7 @@ function Alerts({ alerts, canSeeEvidence, act, ask, evidence }: PageProps) {
     resolved: alerts.filter(alert => alert.status === 'resolved').length,
     dismissed: alerts.filter(alert => alert.status === 'dismissed').length,
   };
-  const visible = filter === 'all' ? alerts : alerts.filter(alert => alert.status === filter);
+  const visible = helpFirst(filter === 'all' ? alerts : alerts.filter(alert => alert.status === filter));
   return (
     <div>
       <p className="eyebrow">Alerts</p>
@@ -404,6 +456,21 @@ function Advanced({ selected }: { selected: any }) {
       {selected ? <>
         <p className="lede">{selected.title} — model reasoning</p>
         <p className="muted">{selected.triage?.reasoning || 'No additional reasoning provided.'}</p>
+        <h3>Confidence</h3>
+        <p className="muted">
+          Final: {selected.triage?.confidence || '—'} · Model’s own: {selected.triage?.model_confidence || 'none (no model output)'} · Guidance: {selected.triage?.guidance_tier || '—'}
+        </p>
+        <table className="list">
+          <tbody>
+            <tr><th>Downgrade</th><th>Why</th></tr>
+            {(Array.isArray(selected.triage?.confidence_reasons) ? selected.triage.confidence_reasons : []).map((reason: { code: string; detail: string }, index: number) => (
+              <tr key={index}><td><b>{reason.code}</b></td><td>{reason.detail}</td></tr>
+            ))}
+            {!selected.triage?.confidence_reasons?.length && <tr><td colSpan={2} className="muted">No code checks lowered the model’s confidence.</td></tr>}
+          </tbody>
+        </table>
+        <h3>What the model could not determine</h3>
+        <p className="muted">{selected.triage?.uncertainty || 'The model did not say.'}</p>
         <h3>MITRE ATT&amp;CK</h3>
         <p className="muted">{selected.mitre?.join(' · ') || 'Not supplied by this source.'}</p>
         <pre className="evidence">{JSON.stringify(selected.raw, null, 2)}</pre>

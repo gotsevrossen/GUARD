@@ -123,12 +123,28 @@
     .dot.low{background:var(--sev-low)}
     .dot.medium{background:var(--sev-med)}
     .dot.high{background:var(--sev-high)}
+    /* unknown is not "low": grey, never the reassuring green */
+    .dot.unknown{background:var(--muted)}
     /* severity always carries its name, so colour is never the only signal */
     .sev{display:inline-block;margin-right:8px;font-size:.68rem;font-weight:600;
       letter-spacing:.1em;text-transform:uppercase;color:var(--sev-low)}
-    .sev.medium{color:#8a6314} .sev.high{color:#96342a}
+    .sev.medium{color:#8a6314} .sev.high{color:#96342a} .sev.unknown{color:var(--muted)}
     .pill{display:inline-block;padding:4px 11px;border-radius:999px;background:rgba(0,0,0,.07);
       font-size:.68rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+    .pill.get_help{margin-right:8px;background:var(--sev-high);color:#fff}
+
+    /* guidance banner: fixed wording chosen by the server from severity and
+       confidence. caution/review are an outlined callout inside the open alert card;
+       get_help is a solid severity-high block (white on --sev-high is 5.1:1) */
+    .guidance{margin:4px 0 0;padding:18px 20px;border:1px solid var(--line);border-radius:var(--r-sm)}
+    .detail .guidance .eyebrow{margin:0 0 6px}
+    .guidance strong{display:block;font-size:.95rem;font-weight:600;line-height:1.45}
+    .guidance p{margin:8px 0 0;font-size:.9rem;line-height:1.6;color:var(--muted)}
+    .guidance p b{font-weight:600;color:var(--ink)}
+    .guidance ol{margin:8px 0 0}
+    .guidance.get_help{border-color:var(--sev-high);background:var(--sev-high);color:#fff}
+    .detail .guidance.get_help .eyebrow,.guidance.get_help p,.detail .guidance.get_help li,
+    .detail .guidance.get_help li b{color:#fff}
     .chips{display:flex;gap:8px;margin:18px 0 4px;flex-wrap:wrap}
     .chips button{padding:8px 16px;border:1px solid var(--line);border-radius:999px;background:transparent;
       color:var(--ink);font:inherit;font-size:.8rem;font-weight:500;cursor:pointer}
@@ -405,19 +421,31 @@
         </section>
         <section class="recent">
           <div class="head"><p class="eyebrow">Recent activity</p><h2>Latest alerts</h2></div>
-          <details class="alert">
+          <!-- open by default in the frame to show the get_help banner -->
+          <details class="alert" open>
             <summary>
               <span class="dot high"></span>
-              <div><span class="sev high">High</span><b>Repeated failed logins from one address</b>
+              <div><span class="sev high">High severity · Low confidence</span><span class="pill get_help">Get help now</span><b>Repeated failed logins from one address</b>
                 <p>14 failed sign-ins to the file server in four minutes, all from 10.0.4.66.</p></div>
               <span class="when">Today, 11:07 AM</span><span class="chev">&#9662;</span>
             </summary>
             <div class="detail">
+              <div class="guidance get_help">
+                <p class="eyebrow">Get help now</p>
+                <strong>Contact your IT provider or a security professional now.</strong>
+                <p>This could be serious, and LightHouse can’t be sure what happened. Call your IT provider, a managed security provider or an incident-response firm, and tell them about this alert. While you wait:</p>
+                <ol>
+                  <li><b>Don’t delete files, programs or logs.</b> Whoever investigates will need them.</li>
+                  <li><b>Don’t reply to, contact or pay anyone demanding money.</b></li>
+                  <li><b>Write down what you saw:</b> the time, anything on screen, and anything unusual.</li>
+                  <li><b>Disconnect the affected device from the network</b> (unplug its cable or turn off its Wi-Fi) if that won’t stop critical work. Leave it switched on.</li>
+                </ol>
+              </div>
               <p class="eyebrow">What this means</p>
               <p>Fourteen sign-in attempts failed against one server inside four minutes, from an address
                 that has never held a successful session. That rate and that pattern look like someone
                 working through a list of passwords, not a person mistyping their own.</p>
-              <p class="eyebrow">Recommended steps</p>
+              <p class="eyebrow">LightHouse’s suggestion — check with your IT provider first</p>
               <ol>
                 <li><b>Block 10.0.4.66 first.</b> Drop it at the firewall, or unplug the device if it sits on your own network. This stops the attempts while you look into it.</li>
                 <li><b>Work out what the device is.</b> It is not in your known-device list. Your router DHCP table will show the lease, and the switch will show which port it is on.</li>
@@ -435,11 +463,16 @@
           <details class="alert">
             <summary>
               <span class="dot medium"></span>
-              <div><span class="sev medium">Medium</span><b>Unusual DNS activity detected</b>
+              <div><span class="sev medium">Medium severity · Low confidence</span><b>Unusual DNS activity detected</b>
                 <p>A device made an unusual request. Review the device if this repeats.</p></div>
               <span class="when">Today, 10:42 AM</span><span class="chev">&#9662;</span>
             </summary>
             <div class="detail">
+              <div class="guidance review">
+                <p class="eyebrow">Needs a second opinion</p>
+                <strong>LightHouse isn’t sure about this one.</strong>
+                <p>The explanation below may be wrong, in either direction. Before you change anything, have someone technical (your IT provider or a tech-savvy colleague) look at this alert. Leave it open until they have.</p>
+              </div>
               <p class="eyebrow">What this means</p>
               <p>front-desk-pc asked for 214 different subdomains of a single domain in three minutes.
                 That shape of traffic is one way data gets smuggled out over DNS, but ad blockers,
@@ -462,11 +495,16 @@
           <details class="alert">
             <summary>
               <span class="dot low"></span>
-              <div><span class="sev">Low</span><b>New device joined the network</b>
+              <div><span class="sev">Low severity · Low confidence</span><b>New device joined the network</b>
                 <p>A new device was observed. Confirm that it belongs to your business.</p></div>
               <span class="when">Today, 9:18 AM</span><span class="chev">&#9662;</span>
             </summary>
             <div class="detail">
+              <div class="guidance caution">
+                <p class="eyebrow">Double-check</p>
+                <strong>LightHouse is fairly confident about this, but please double-check before acting.</strong>
+                <p><b>Check first:</b> ask whoever uses this device whether they expected this activity at this time. If nobody did, treat the alert as real.</p>
+              </div>
               <p class="eyebrow">What this means</p>
               <p>A device with a hardware address LightHouse has not seen before took an address on your
                 network. Most of the time this is a phone, a laptop or a printer being switched on.</p>
@@ -507,17 +545,28 @@
           <details class="alert">
             <summary>
               <span class="dot high"></span>
-              <div><span class="sev high">High</span><span class="pill">Open</span>
+              <div><span class="sev high">High severity · Low confidence</span><span class="pill get_help">Get help now</span><span class="pill">Open</span>
                 <b>Repeated failed logins from one address</b>
                 <p>14 failed sign-ins to the file server in four minutes, all from 10.0.4.66.</p></div>
               <span class="when">Today, 11:07 AM</span><span class="chev">&#9662;</span>
             </summary>
             <div class="detail">
+              <div class="guidance get_help">
+                <p class="eyebrow">Get help now</p>
+                <strong>Contact your IT provider or a security professional now.</strong>
+                <p>This could be serious, and LightHouse can’t be sure what happened. Call your IT provider, a managed security provider or an incident-response firm, and tell them about this alert. While you wait:</p>
+                <ol>
+                  <li><b>Don’t delete files, programs or logs.</b> Whoever investigates will need them.</li>
+                  <li><b>Don’t reply to, contact or pay anyone demanding money.</b></li>
+                  <li><b>Write down what you saw:</b> the time, anything on screen, and anything unusual.</li>
+                  <li><b>Disconnect the affected device from the network</b> (unplug its cable or turn off its Wi-Fi) if that won’t stop critical work. Leave it switched on.</li>
+                </ol>
+              </div>
               <p class="eyebrow">What this means</p>
               <p>Fourteen sign-in attempts failed against one server inside four minutes, from an address
                 that has never held a successful session. That rate and that pattern look like someone
                 working through a list of passwords, not a person mistyping their own.</p>
-              <p class="eyebrow">Recommended steps</p>
+              <p class="eyebrow">LightHouse’s suggestion — check with your IT provider first</p>
               <ol>
                 <li><b>Block 10.0.4.66 first.</b> Drop it at the firewall, or unplug the device if it sits on your own network. This stops the attempts while you look into it.</li>
                 <li><b>Work out what the device is.</b> It is not in your known-device list. Your router DHCP table will show the lease, and the switch will show which port it is on.</li>
@@ -535,12 +584,17 @@
           <details class="alert">
             <summary>
               <span class="dot medium"></span>
-              <div><span class="sev medium">Medium</span><span class="pill">Open</span>
+              <div><span class="sev medium">Medium severity · Low confidence</span><span class="pill">Open</span>
                 <b>Unusual DNS activity detected</b>
                 <p>A device made an unusual request. Review the device if this repeats.</p></div>
               <span class="when">Today, 10:42 AM</span><span class="chev">&#9662;</span>
             </summary>
             <div class="detail">
+              <div class="guidance review">
+                <p class="eyebrow">Needs a second opinion</p>
+                <strong>LightHouse isn’t sure about this one.</strong>
+                <p>The explanation below may be wrong, in either direction. Before you change anything, have someone technical (your IT provider or a tech-savvy colleague) look at this alert. Leave it open until they have.</p>
+              </div>
               <p class="eyebrow">What this means</p>
               <p>front-desk-pc asked for 214 different subdomains of a single domain in three minutes.
                 That shape of traffic is one way data gets smuggled out over DNS, but ad blockers,
@@ -563,12 +617,17 @@
           <details class="alert">
             <summary>
               <span class="dot low"></span>
-              <div><span class="sev">Low</span><span class="pill">Resolved</span>
+              <div><span class="sev">Low severity · Low confidence</span><span class="pill">Resolved</span>
                 <b>New device joined the network</b>
                 <p>A new device was observed. Confirm that it belongs to your business.</p></div>
               <span class="when">Today, 9:18 AM</span><span class="chev">&#9662;</span>
             </summary>
             <div class="detail">
+              <div class="guidance caution">
+                <p class="eyebrow">Double-check</p>
+                <strong>LightHouse is fairly confident about this, but please double-check before acting.</strong>
+                <p><b>Check first:</b> ask whoever uses this device whether they expected this activity at this time. If nobody did, treat the alert as real.</p>
+              </div>
               <p class="eyebrow">What this means</p>
               <p>A device with a hardware address LightHouse has not seen before took an address on your
                 network. Most of the time this is a phone, a laptop or a printer being switched on.</p>
@@ -588,7 +647,7 @@
           <details class="alert">
             <summary>
               <span class="dot medium"></span>
-              <div><span class="sev medium">Medium</span><span class="pill">Resolved</span>
+              <div><span class="sev medium">Medium severity · High confidence</span><span class="pill">Resolved</span>
                 <b>Port scan against the front desk PC</b>
                 <p>A device swept 1,024 ports in under a minute. Blocked at the firewall.</p></div>
               <span class="when">Yesterday, 4:51 PM</span><span class="chev">&#9662;</span>
@@ -613,7 +672,7 @@
           <details class="alert">
             <summary>
               <span class="dot low"></span>
-              <div><span class="sev">Low</span><span class="pill">Resolved</span>
+              <div><span class="sev">Low severity · High confidence</span><span class="pill">Resolved</span>
                 <b>Certificate expires in 14 days</b>
                 <p>The internal certificate for the print server needs renewing this month.</p></div>
               <span class="when">Yesterday, 8:02 AM</span><span class="chev">&#9662;</span>
@@ -638,7 +697,7 @@
           <details class="alert">
             <summary>
               <span class="dot low"></span>
-              <div><span class="sev">Low</span><span class="pill">Dismissed</span>
+              <div><span class="sev">Low severity · High confidence</span><span class="pill">Dismissed</span>
                 <b>Scheduled backup traffic spike</b>
                 <p>Expected nightly transfer to the backup appliance. Marked as normal.</p></div>
               <span class="when">2 days ago</span><span class="chev">&#9662;</span>
@@ -765,6 +824,16 @@
         <p class="lede">Repeated failed logins from one address &mdash; model reasoning</p>
         <p class="muted">14 authentication failures against a single host inside four minutes, from an address with
           no prior successful session. Consistent with credential stuffing rather than a user mistyping a password.</p>
+        <h3>Confidence</h3>
+        <p class="muted">Final: low &middot; Model&rsquo;s own: low &middot; Guidance: get_help</p>
+        <table class="list">
+          <tbody>
+            <tr><th>Downgrade</th><th>Why</th></tr>
+            <tr><td><b>unfamiliar_rule</b></td><td>Rule 60204 from wazuh is not in LightHouse&rsquo;s tested set.</td></tr>
+          </tbody>
+        </table>
+        <h3>What the model could not determine</h3>
+        <p class="muted">Whether any attempt succeeded: the record covers only the failures.</p>
         <h3>MITRE ATT&amp;CK</h3>
         <p class="muted">T1110 Brute Force &middot; T1078 Valid Accounts</p>
         <pre class="evidence">{

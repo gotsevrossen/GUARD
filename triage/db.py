@@ -13,7 +13,8 @@ import bcrypt
 
 from .dedupe import fingerprint
 from .paths import data_dir, first_run_password_path, is_desktop
-from .schema import AlertDetail, AlertStatus, NormalizedAlert, TriageResult
+from .guidance import guidance_tier
+from .schema import AlertDetail, AlertStatus, AssessedTriage, NormalizedAlert
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS alerts (id INTEGER PRIMARY KEY, source TEXT NOT NULL, source_event_id TEXT,
@@ -23,7 +24,9 @@ CREATE TABLE IF NOT EXISTS alerts (id INTEGER PRIMARY KEY, source TEXT NOT NULL,
 CREATE INDEX IF NOT EXISTS idx_alerts_filter ON alerts(timestamp DESC, status, source);
 CREATE INDEX IF NOT EXISTS idx_alerts_fingerprint ON alerts(fingerprint, timestamp DESC);
 CREATE TABLE IF NOT EXISTS triage_results (alert_id INTEGER PRIMARY KEY REFERENCES alerts(id), severity TEXT NOT NULL,
-  explanation TEXT NOT NULL, recommended_action TEXT NOT NULL, reasoning TEXT, model TEXT, latency_ms INTEGER);
+  explanation TEXT NOT NULL, recommended_action TEXT NOT NULL, reasoning TEXT, model TEXT, latency_ms INTEGER,
+  confidence TEXT NOT NULL DEFAULT 'low', model_confidence TEXT, confidence_reasons TEXT NOT NULL DEFAULT '[]',
+  guidance_tier TEXT, uncertainty TEXT);
 CREATE TABLE IF NOT EXISTS alert_occurrences (id INTEGER PRIMARY KEY, alert_id INTEGER REFERENCES alerts(id),
   seen_at TEXT NOT NULL, raw TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash BLOB NOT NULL,
@@ -38,6 +41,8 @@ CREATE TABLE IF NOT EXISTS user_settings (user_id INTEGER NOT NULL REFERENCES us
 # rather than truncating, so length is checked here before bcrypt ever sees it.
 MAX_PASSWORD_BYTES = 72
 SESSION_HOURS = 8
+LEGACY_CONFIDENCE_REASONS = json.dumps([{"code": "legacy",
+                                         "detail": "Triaged before LightHouse checked AI confidence."}])
 
 # Compared against when the requested username does not exist, so that a failed
 # login costs one bcrypt verification either way and cannot be used to tell
@@ -181,6 +186,20 @@ class Database:
         alert_columns = {row["name"] for row in con.execute("PRAGMA table_info(alerts)")}
         if "sensor_severity" not in alert_columns:
             con.execute("ALTER TABLE alerts ADD COLUMN sensor_severity TEXT NOT NULL DEFAULT 'unknown'")
+        triage_columns = {row["name"] for row in con.execute("PRAGMA table_info(triage_results)")}
+        # Rows triaged before confidence existed default to LOW: nothing checked them,
+        # so claiming more would be the very overconfidence this feature removes.
+        for column, definition in (("confidence", "TEXT NOT NULL DEFAULT 'low'"), ("model_confidence", "TEXT"),
+                                   ("confidence_reasons", "TEXT NOT NULL DEFAULT '[]'"),
+                                   ("guidance_tier", "TEXT"), ("uncertainty", "TEXT")):
+            if column not in triage_columns:
+                con.execute(f"ALTER TABLE triage_results ADD COLUMN {column} {definition}")
+        pending = con.execute("SELECT t.alert_id,t.severity,t.confidence,a.sensor_severity FROM triage_results t "
+                              "JOIN alerts a ON a.id=t.alert_id WHERE t.guidance_tier IS NULL").fetchall()
+        for row in pending:
+            con.execute("UPDATE triage_results SET guidance_tier=?, confidence_reasons=? WHERE alert_id=?",
+                        (str(guidance_tier(row["severity"], row["confidence"], row["sensor_severity"])),
+                         LEGACY_CONFIDENCE_REASONS, row["alert_id"]))
 
     def _restrict_permissions(self) -> None:
         """Owner-only on the database and its WAL sidecars: it holds password hashes."""
@@ -202,7 +221,9 @@ class Database:
             row = con.execute("SELECT id FROM alerts WHERE fingerprint=? AND timestamp>=? ORDER BY timestamp DESC LIMIT 1", (fingerprint(alert), cutoff)).fetchone()
             return int(row["id"]) if row else None
 
-    def store(self, alert: NormalizedAlert, triage: TriageResult, model: str | None = None, latency_ms: int | None = None) -> int:
+    def store(self, alert: NormalizedAlert, triage: AssessedTriage, model: str | None = None, latency_ms: int | None = None) -> int:
+        """Takes only an AssessedTriage (see triage.service.assess), so nothing reaches
+        the database without the severity floor and confidence cap applied."""
         now = datetime.now(timezone.utc).isoformat()
         with self.connect() as con:
             cur = con.execute(
@@ -213,8 +234,12 @@ class Database:
                  fingerprint(alert), str(alert.sensor_severity), now))
             alert_id = cur.lastrowid
             con.execute(
-                "INSERT INTO triage_results(alert_id,severity,explanation,recommended_action,reasoning,model,latency_ms) VALUES(?,?,?,?,?,?,?)",
-                (alert_id, str(triage.severity), triage.explanation, triage.recommended_action, triage.reasoning, model, latency_ms))
+                """INSERT INTO triage_results(alert_id,severity,explanation,recommended_action,reasoning,model,latency_ms,
+                   confidence,model_confidence,confidence_reasons,guidance_tier,uncertainty) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (alert_id, str(triage.severity), triage.explanation, triage.recommended_action, triage.reasoning, model, latency_ms,
+                 str(triage.confidence), str(triage.model_confidence) if triage.model_confidence else None,
+                 json.dumps([reason.model_dump() for reason in triage.confidence_reasons]),
+                 str(triage.guidance_tier), triage.uncertainty))
             return int(alert_id)
 
     def suppress(self, alert_id: int, raw: dict[str, Any]) -> None:
@@ -228,14 +253,19 @@ class Database:
         if status: clauses.append("a.status=?"); params.append(status)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         with self.connect() as con:
-            rows = con.execute(f"SELECT a.id,a.source,a.timestamp,a.title,a.source_ip,a.destination_ip,a.device,a.status,a.duplicate_count,a.sensor_severity,t.severity,t.explanation,t.recommended_action FROM alerts a JOIN triage_results t ON t.alert_id=a.id {where} ORDER BY a.timestamp DESC LIMIT ?", (*params, limit)).fetchall()
+            rows = con.execute(f"SELECT a.id,a.source,a.timestamp,a.title,a.source_ip,a.destination_ip,a.device,a.status,a.duplicate_count,a.sensor_severity,t.severity,t.confidence,t.guidance_tier,t.explanation,t.recommended_action FROM alerts a JOIN triage_results t ON t.alert_id=a.id {where} ORDER BY a.timestamp DESC LIMIT ?", (*params, limit)).fetchall()
             return [dict(row) for row in rows]
 
     def get_alert(self, alert_id: int) -> AlertDetail | None:
         with self.connect() as con:
-            row = con.execute("SELECT a.*,t.severity,t.explanation,t.recommended_action,t.reasoning FROM alerts a LEFT JOIN triage_results t ON t.alert_id=a.id WHERE a.id=?", (alert_id,)).fetchone()
+            row = con.execute("SELECT a.*,t.severity,t.explanation,t.recommended_action,t.reasoning,t.confidence,t.model_confidence,t.confidence_reasons,t.guidance_tier,t.uncertainty FROM alerts a LEFT JOIN triage_results t ON t.alert_id=a.id WHERE a.id=?", (alert_id,)).fetchone()
         if not row: return None
-        triage = TriageResult(severity=row["severity"], explanation=row["explanation"], recommended_action=row["recommended_action"], reasoning=row["reasoning"]) if row["severity"] else None
+        triage = AssessedTriage(
+            severity=row["severity"], explanation=row["explanation"], recommended_action=row["recommended_action"],
+            reasoning=row["reasoning"], confidence=row["confidence"], model_confidence=row["model_confidence"],
+            confidence_reasons=json.loads(row["confidence_reasons"] or "[]"), uncertainty=row["uncertainty"],
+            guidance_tier=row["guidance_tier"] or guidance_tier(row["severity"], row["confidence"], row["sensor_severity"]),
+        ) if row["severity"] else None
         return AlertDetail(id=row["id"], source=row["source"], timestamp=row["timestamp"], title=row["title"], source_ip=row["source_ip"],
                            destination_ip=row["destination_ip"], device=row["device"], rule_id=row["rule_id"], mitre=json.loads(row["mitre"]),
                            raw=json.loads(row["raw"]), status=row["status"], duplicate_count=row["duplicate_count"],

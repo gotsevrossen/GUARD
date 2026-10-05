@@ -96,12 +96,28 @@ p{line-height:1.55}
 .dot.low{background:var(--sev-low)}
 .dot.medium{background:var(--sev-med)}
 .dot.high,.dot.critical{background:var(--sev-high)}
+/* unknown is not "low": grey, never the reassuring green */
+.dot.unknown{background:var(--muted)}
 /* severity always carries its name, so colour is never the only signal */
 .sev{display:inline-block;margin-right:8px;font-size:.68rem;font-weight:600;
   letter-spacing:.1em;text-transform:uppercase;color:var(--sev-low)}
-.sev.medium{color:#8a6314} .sev.high,.sev.critical{color:#96342a}
+.sev.medium{color:#8a6314} .sev.high,.sev.critical{color:#96342a} .sev.unknown{color:var(--muted)}
 .pill{display:inline-block;padding:4px 11px;border-radius:999px;background:rgba(0,0,0,.07);
   font-size:.68rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.pill.get_help{margin-right:8px;background:var(--sev-high);color:#fff}
+
+/* guidance banner: fixed wording chosen by the server from severity and
+   confidence. caution/review are an outlined callout inside the open alert card;
+   get_help is a solid severity-high block (white on --sev-high is 5.1:1) */
+.guidance{margin:4px 0 0;padding:18px 20px;border:1px solid var(--line);border-radius:var(--r-sm)}
+.detail .guidance .eyebrow{margin:0 0 6px}
+.guidance strong{display:block;font-size:.95rem;font-weight:600;line-height:1.45}
+.guidance p{margin:8px 0 0;font-size:.9rem;line-height:1.6;color:var(--muted)}
+.guidance p b{font-weight:600;color:var(--ink)}
+.guidance ol{margin:8px 0 0}
+.guidance.get_help{border-color:var(--sev-high);background:var(--sev-high);color:#fff}
+.detail .guidance.get_help .eyebrow,.guidance.get_help p,.detail .guidance.get_help li,
+.detail .guidance.get_help li b{color:#fff}
 .chips{display:flex;gap:8px;margin:18px 0 4px;flex-wrap:wrap}
 .chips button{padding:8px 16px;border:1px solid var(--line);border-radius:999px;background:transparent;
   color:var(--ink);font:inherit;font-size:.8rem;font-weight:500;cursor:pointer}

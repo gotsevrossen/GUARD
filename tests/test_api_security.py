@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from triage.db import Database, hash_token
 from triage.schema import NormalizedAlert, Severity, Source, TriageResult
+from triage.service import assess
 
 ANALYST_PASSWORD = "analyst-password-1"
 OWNER_PASSWORD = "owner-password-1"
@@ -55,8 +56,8 @@ def seed_alert(api) -> int:
              "http": {"hostname": "internal-fileserver"}})
     triage = TriageResult(severity=Severity.HIGH, explanation="A device scanned your network.",
                           recommended_action="Check the device at 192.168.1.25.",
-                          reasoning="ANALYST-ONLY-REASONING-MARKER")
-    return api.db.store(alert, triage)
+                          reasoning="ANALYST-ONLY-REASONING-MARKER", uncertainty="ANALYST-ONLY-UNCERTAINTY-MARKER")
+    return api.db.store(alert, assess(alert, triage))
 
 
 # --- FIX 3: no account-existence oracle -------------------------------------
@@ -225,10 +226,25 @@ def test_owner_alert_detail_hides_raw_rule_id_and_reasoning(api, client):
     assert "SENSITIVE-PAYLOAD-MARKER" not in serialized
     assert "ANALYST-ONLY-REASONING-MARKER" not in serialized
     assert "internal-fileserver" not in serialized
+    # Confidence internals are analyst-only too.
+    for hidden in ("model_confidence", "confidence_reasons", "uncertainty"):
+        assert hidden not in body["triage"]
+    assert "ANALYST-ONLY-UNCERTAINTY-MARKER" not in serialized
     # Everything an owner is supposed to see survives.
     assert body["triage"]["severity"] == "high"
+    assert body["triage"]["confidence"] in {"high", "medium", "low"}
+    assert body["triage"]["guidance_tier"] in {"standard", "caution", "review", "get_help"}
     assert body["triage"]["explanation"]
     assert body["title"]
+
+
+def test_alert_list_carries_confidence_and_tier_but_nothing_analyst_only(api, client):
+    seed_alert(api)
+    api.db.create_user("owner1", OWNER_PASSWORD, "owner")
+    rows = client.get("/api/alerts", headers=auth(login(client, "owner1", OWNER_PASSWORD))).json()
+    assert rows[0]["confidence"] and rows[0]["guidance_tier"]
+    for hidden in ("model_confidence", "confidence_reasons", "uncertainty", "reasoning", "raw", "rule_id"):
+        assert hidden not in rows[0]
 
 
 def test_analyst_alert_detail_still_has_the_evidence(api, client):
@@ -240,6 +256,9 @@ def test_analyst_alert_detail_still_has_the_evidence(api, client):
     assert body["raw"]["payload_printable"] == "SENSITIVE-PAYLOAD-MARKER"
     assert body["rule_id"] == "2001219"
     assert body["triage"]["reasoning"] == "ANALYST-ONLY-REASONING-MARKER"
+    assert body["triage"]["uncertainty"] == "ANALYST-ONLY-UNCERTAINTY-MARKER"
+    assert body["triage"]["model_confidence"] == "low"  # TriageResult's default when the model omits it
+    assert isinstance(body["triage"]["confidence_reasons"], list)
 
 
 # --- FIX 6/7: deployment posture --------------------------------------------

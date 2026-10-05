@@ -135,6 +135,7 @@ def test_valid_reply_is_validated_and_first_attempt_is_unconstrained(tmp_path):
     model, _ = model_with(llama, tmp_path)
     result = asyncio.run(model.triage(SMOKE_TEST_ALERT))
     assert result.severity == Severity.HIGH and result.reasoning == VALID["reasoning"]
+    assert not result.retried and not result.unavailable
     call = llama.calls[0]
     assert "response_format" not in call and call["max_tokens"] == 512
     assert call["messages"][0]["role"] == "system"
@@ -152,6 +153,7 @@ def test_malformed_reply_retries_with_grammar_then_succeeds(tmp_path):
     model, _ = model_with(llama, tmp_path)
     result = asyncio.run(model.triage(SMOKE_TEST_ALERT))
     assert result.severity == Severity.HIGH
+    assert result.retried, "the confidence cap needs to know a retry was needed"
     assert [("response_format" in call) for call in llama.calls] == [False, True]
     assert llama.calls[1]["response_format"] == {"type": "json_object", "schema": TRIAGE_JSON_SCHEMA}
 
@@ -176,6 +178,7 @@ def test_inference_exception_degrades_instead_of_raising(tmp_path):
     model, _ = model_with(llama, tmp_path)
     result = asyncio.run(model.triage(SMOKE_TEST_ALERT))
     assert is_unavailable(result) and "llama_decode" in result.reasoning
+    assert result.unavailable
 
 
 def test_model_is_loaded_once_and_calls_are_serialized(tmp_path):

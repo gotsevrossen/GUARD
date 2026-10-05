@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 
 
 class Source(StrEnum):
@@ -47,6 +47,37 @@ def max_severity(first: Any, second: Any) -> Severity:
     return left if SEVERITY_RANK[left] >= SEVERITY_RANK[right] else right
 
 
+class Confidence(StrEnum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+CONFIDENCE_RANK: dict[Confidence, int] = {Confidence.LOW: 1, Confidence.MEDIUM: 2, Confidence.HIGH: 3}
+
+
+def coerce_confidence(value: Any) -> Confidence:
+    """Anything unrecognised is LOW: an unreadable confidence is no confidence."""
+    try:
+        return Confidence(value)
+    except ValueError:
+        return Confidence.LOW
+
+
+def min_confidence(first: Any, second: Any) -> Confidence:
+    """Return the less confident of two values. Mirrors max_severity, in the other
+    direction: confidence only ever moves down."""
+    left, right = coerce_confidence(first), coerce_confidence(second)
+    return left if CONFIDENCE_RANK[left] <= CONFIDENCE_RANK[right] else right
+
+
+class GuidanceTier(StrEnum):
+    STANDARD = "standard"
+    CAUTION = "caution"
+    REVIEW = "review"
+    GET_HELP = "get_help"
+
+
 class AlertStatus(StrEnum):
     OPEN = "open"
     RESOLVED = "resolved"
@@ -81,16 +112,79 @@ class NormalizedAlert(BaseModel):
         return datetime.fromisoformat(value)
 
 
+UNCERTAINTY_MAX_CHARS = 400
+
+
 class TriageResult(BaseModel):
+    """What a model runtime returns, validated. Only these fields can come from model
+    JSON; anything else the model emits is dropped by validation."""
     severity: Severity
+    # A missing or unrecognised confidence becomes LOW instead of failing
+    # validation: failing would force the slow grammar-constrained retry only to
+    # arrive at the same conservative answer.
+    confidence: Confidence = Confidence.LOW
     explanation: str = Field(min_length=1, max_length=1200)
     recommended_action: str = Field(min_length=1, max_length=600)
     reasoning: str | None = Field(default=None, max_length=2400)
+    # What the model could not determine. Analyst-only.
+    uncertainty: str | None = Field(default=None, max_length=UNCERTAINTY_MAX_CHARS)
+
+    # Set by the runtime after validation. Private attributes are never populated
+    # from input, so model output cannot claim it needed no retry or was available.
+    _retried: bool = PrivateAttr(default=False)
+    _unavailable: bool = PrivateAttr(default=False)
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def lenient_confidence(cls, value: Any) -> Confidence:
+        return coerce_confidence(value)
+
+    @field_validator("uncertainty", mode="before")
+    @classmethod
+    def cap_uncertainty(cls, value: Any) -> Any:
+        # An analyst-only note running long is not worth discarding the triage over.
+        if isinstance(value, str):
+            return value[:UNCERTAINTY_MAX_CHARS] or None
+        return value
+
+    @property
+    def retried(self) -> bool:
+        return self._retried
+
+    @property
+    def unavailable(self) -> bool:
+        return self._unavailable
+
+    def with_runtime_flags(self, *, retried: bool = False, unavailable: bool = False) -> "TriageResult":
+        copy = self.model_copy()
+        copy._retried, copy._unavailable = retried, unavailable
+        return copy
+
+
+class ConfidenceReason(BaseModel):
+    """One code check that capped confidence. Analyst-only."""
+    code: str
+    detail: str
+
+
+class AssessedTriage(TriageResult):
+    """A TriageResult after the code-side controls: sensor floor, confidence cap and
+    guidance tier. These extra fields are computed by triage.service, never parsed
+    from model output (runtimes validate into TriageResult, which drops them)."""
+    # `model_confidence` is a domain name, not a Pydantic internal.
+    model_config = ConfigDict(protected_namespaces=())
+
+    model_confidence: Confidence | None = None
+    confidence_reasons: list[ConfidenceReason] = Field(default_factory=list)
+    guidance_tier: GuidanceTier
 
 
 class TriagePublic(BaseModel):
-    """Triage fields an owner may see. Deliberately has no `reasoning`."""
+    """Triage fields an owner may see. Deliberately has no `reasoning`,
+    `uncertainty`, `model_confidence` or `confidence_reasons`."""
     severity: Severity
+    confidence: Confidence
+    guidance_tier: GuidanceTier
     explanation: str
     recommended_action: str
 
@@ -109,7 +203,7 @@ class AlertDetail(BaseModel):
     status: AlertStatus
     duplicate_count: int
     sensor_severity: Severity = Severity.UNKNOWN
-    triage: TriageResult | None
+    triage: AssessedTriage | None
 
 
 class AlertDetailOwner(BaseModel):
@@ -135,6 +229,7 @@ class AlertDetailOwner(BaseModel):
 
     @classmethod
     def from_detail(cls, detail: AlertDetail) -> "AlertDetailOwner":
-        # Pydantic ignores unknown keys by default, so `raw`, `rule_id` and
-        # `triage.reasoning` are dropped by validation rather than by hand.
+        # Pydantic ignores unknown keys by default, so `raw`, `rule_id`,
+        # `triage.reasoning`, `triage.uncertainty`, `triage.model_confidence` and
+        # `triage.confidence_reasons` are dropped by validation rather than by hand.
         return cls.model_validate(detail.model_dump())

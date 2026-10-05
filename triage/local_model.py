@@ -176,9 +176,12 @@ class LlamaCppTriageModel(TriageModel):
             if not await self._ensure_loaded():
                 return unavailable_result(f"Local AI model unavailable: {self._load_error}")
             last_error: Exception | None = None
-            for constrained in self.ATTEMPTS:
+            for attempt, constrained in enumerate(self.ATTEMPTS):
                 try:
-                    return await asyncio.to_thread(self._infer_blocking, alert, constrained)
+                    result = await asyncio.to_thread(self._infer_blocking, alert, constrained)
+                    # A reply that only validated under the grammar is a weaker
+                    # signal; the confidence cap reads this flag.
+                    return result.with_runtime_flags(retried=attempt > 0)
                 except Exception as error:
                     # Malformed or truncated JSON, schema violations and runtime
                     # errors alike: never raised, or one alert could stall a sensor.
