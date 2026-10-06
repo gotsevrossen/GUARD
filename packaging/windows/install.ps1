@@ -33,6 +33,27 @@ function Run([string]$File, [string]$Arguments) {
     if ($process.ExitCode -eq 3010) { Write-Host 'Dependency requests a reboot; reboot after setup.' }
     elseif ($process.ExitCode -ne 0) { throw "$File failed with exit code $($process.ExitCode)" }
 }
+function Test-Suricata([string]$Exe, [string]$Python) {
+    # -T treats any rule that fails to parse as fatal, and ET Open ships rules using
+    # keywords this build lacks (file.magic). Disable exactly those rules once and
+    # test again; a configuration error, or a ruleset that does not match the
+    # engine, still stops setup. Output goes to the transcript, not a hidden window.
+    $testDir = "$DataDir\cache\suricata-test"
+    for ($attempt = 1; ; $attempt++) {
+        Remove-Item -LiteralPath $testDir -Recurse -Force -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force $testDir | Out-Null
+        Write-Host "Testing Suricata configuration (attempt $attempt)"
+        $process = Start-Process -FilePath $Exe -ArgumentList "-T -c `"$DataDir\config\suricata.yaml`" -l `"$testDir`"" `
+            -Wait -PassThru -WindowStyle Hidden -RedirectStandardOutput "$testDir\stdout.txt" -RedirectStandardError "$testDir\stderr.txt"
+        $logs = @("$testDir\suricata.log", "$testDir\stdout.txt", "$testDir\stderr.txt") | Where-Object { Test-Path -LiteralPath $_ }
+        $output = if ($logs) { Get-Content -LiteralPath $logs } else { @() }
+        $output | Where-Object { $_ -match 'Error|Warning' } | Select-Object -Unique -First 40 | ForEach-Object { Write-Host "  $_" }
+        if ($process.ExitCode -eq 0) { return }
+        if ($attempt -ge 2) { throw "Suricata configuration test failed with exit code $($process.ExitCode); the errors are above." }
+        & $Python "$AppDir\setup\disable_failed_rules.py" "$DataDir\rules\emerging-all.rules" "$DataDir\rules\disabled-by-lighthouse.txt" @logs
+        if ($LASTEXITCODE -ne 0) { throw "Suricata configuration test failed with exit code $($process.ExitCode); the errors are above." }
+    }
+}
 function Assert-Dependency([string]$Path, [string]$Name) {
     $hash = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
     Write-Host "$Name SHA256 $hash"
@@ -105,7 +126,7 @@ try {
             Where-Object { $_.AddressState -eq 'Preferred' } | Select-Object -First 1
         [ordered]@{HomeNet="$($address.IPAddress)/$($address.PrefixLength)";
             CaptureInterface="\Device\NPF_$(([guid]$adapter.InterfaceGuid).ToString('B'))";
-            SuricataDir='C:\Suricata'; ApiPort=8000; ModelPath='';
+            SuricataDir="$env:SystemDrive\Suricata"; ApiPort=8000; ModelPath='';
             NpcapOemInstaller=''} | ConvertTo-Json | Set-Content $configPath -Encoding utf8
     }
     # Model and OllamaPort in configurations from earlier releases are ignored.
@@ -211,7 +232,7 @@ try {
     if (!$vendorYaml) { throw 'Suricata vendor YAML missing.' }
     & $python "$AppDir\setup\configure_suricata.py" $vendorYaml.FullName "$DataDir\config\suricata.yaml" $configPath $DataDir $rules
     if ($LASTEXITCODE -ne 0) { throw 'Invalid Suricata configuration.' }
-    Run $suricataExe.FullName "-T -c `"$DataDir\config\suricata.yaml`" -l `"$DataDir\suricata`""
+    Test-Suricata $suricataExe.FullName $python
     Register 'LightHouse-Suricata' $suricataExe.FullName "-c `"$DataDir\config\suricata.yaml`" -i `"$($config.CaptureInterface)`" -l `"$DataDir\suricata`"" @("PATH=$env:PATH;$env:WINDIR\System32\Npcap")
     Nssm @('set', 'LightHouse-Suricata', 'DependOnService', 'npcap')
     Start-Service LightHouse-Suricata

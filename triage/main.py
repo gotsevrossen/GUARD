@@ -46,7 +46,8 @@ def configured_sources() -> dict[Source, Path]:
             continue
         value = (os.getenv(variable) or "").strip()
         if sys.platform == "win32" and source is Source.SURICATA and variable not in os.environ:
-            value = r"C:\Suricata\log\eve.json"
+            # Windows is not always on C:.
+            value = os.path.join(os.getenv("SystemDrive", "C:") + "\\", "Suricata", "log", "eve.json")
         if value:
             configured[source] = Path(value)
     return configured

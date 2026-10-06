@@ -157,7 +157,13 @@ updating files, preserves the database/config/checkpoints/models, updates servic
 settings in place, reapplies the existing Sysmon XML, regenerates Suricata YAML
 from the vendor file and JSON, validates it with `suricata -T`, and starts services
 in dependency order. ET Open's currently published Suricata 7.0.3 rule archive is
-used with Suricata 8; setup validates the resulting rules/configuration. Download
+used with Suricata 8; setup validates the resulting rules/configuration. `suricata -T`
+fails on any single rule it cannot parse (for example rules using `file.magic`,
+which the Windows build of Suricata lacks), so setup comments out exactly the rules
+that failed, lists them in `rules\disabled-by-lighthouse.txt`, and tests again.
+A configuration error, or more than 100 failing rules (a ruleset that does not
+match the engine), still stops setup. The test output is in `install.log`.
+`SuricataDir` defaults to `Suricata` on the Windows system drive. Download
 SHA256 values are recorded in the transcript and executable packages (including
 cached copies) are checked against `packaging/windows/dependency-hashes.json`.
 The Visual C++ runtime installer and an operator-supplied Npcap OEM installer must

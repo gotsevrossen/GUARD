@@ -26,6 +26,7 @@ Source: "install.ps1"; DestDir: "{app}\setup"; Flags: ignoreversion
 Source: "security.ps1"; DestDir: "{app}\setup"; Flags: ignoreversion
 Source: "dependency-hashes.json"; DestDir: "{app}\setup"; Flags: ignoreversion
 Source: "configure_suricata.py"; DestDir: "{app}\setup"; Flags: ignoreversion
+Source: "disable_failed_rules.py"; DestDir: "{app}\setup"; Flags: ignoreversion
 Source: "uninstall.ps1"; DestDir: "{app}\setup"; Flags: ignoreversion
 [Icons]
 Name: "{group}\LightHouse Dashboard"; Filename: "http://127.0.0.1:8000"
@@ -67,7 +68,7 @@ begin
         Log(Detail);
         Detail := Detail + #13#10#13#10;
       end;
-      RaiseException('LightHouse setup is incomplete. ' + Detail + 'See C:\ProgramData\LightHouse\logs\install.log. Correct the error and rerun this installer.');
+      RaiseException('LightHouse setup is incomplete. ' + Detail + 'See ' + ExpandConstant('{commonappdata}\LightHouse\logs\install.log') + '. Correct the error and rerun this installer.');
     end;
     SetupFailed := False;
   end;

@@ -54,7 +54,12 @@ def test_platform_configuration(monkeypatch):
     monkeypatch.setattr(sys, 'platform', 'win32')
     monkeypatch.delenv('LIGHTHOUSE_SURICATA_PATH', raising=False)
     monkeypatch.setenv('LIGHTHOUSE_WAZUH_PATH', '/var/wazuh/alerts.json')
+    monkeypatch.setenv('SystemDrive', 'C:')
     assert main.configured_sources() == {Source.SURICATA: Path(r'C:\Suricata\log\eve.json')}
+    # Windows installed on another drive.
+    monkeypatch.setenv('SystemDrive', 'D:')
+    assert main.configured_sources() == {Source.SURICATA: Path(r'D:\Suricata\log\eve.json')}
+    monkeypatch.setenv('SystemDrive', 'C:')
     monkeypatch.setenv('LIGHTHOUSE_SYSMON_CHANNEL', '')
     monkeypatch.setenv('LIGHTHOUSE_SECURITY_CHANNEL', 'Security')
     assert configured_channels() == ['Security']
