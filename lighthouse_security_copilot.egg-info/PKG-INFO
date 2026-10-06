@@ -8,6 +8,11 @@ Requires-Dist: uvicorn[standard]<1,>=0.30
 Requires-Dist: pydantic<3,>=2.8
 Requires-Dist: httpx<1,>=0.27
 Requires-Dist: bcrypt<5,>=4.2
+Requires-Dist: pywin32>=308; sys_platform == "win32"
+Requires-Dist: llama-cpp-python==0.3.35; sys_platform == "win32"
+Provides-Extra: desktop
+Requires-Dist: pywebview<6,>=5.1; extra == "desktop"
 Provides-Extra: dev
 Requires-Dist: pytest<9,>=8.3; extra == "dev"
 Requires-Dist: pytest-asyncio<1,>=0.24; extra == "dev"
+Requires-Dist: pyinstaller<7,>=6.10; extra == "dev"

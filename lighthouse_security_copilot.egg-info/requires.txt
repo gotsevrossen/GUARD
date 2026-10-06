@@ -4,6 +4,14 @@ pydantic<3,>=2.8
 httpx<1,>=0.27
 bcrypt<5,>=4.2
 
+[:sys_platform == "win32"]
+pywin32>=308
+llama-cpp-python==0.3.35
+
+[desktop]
+pywebview<6,>=5.1
+
 [dev]
 pytest<9,>=8.3
 pytest-asyncio<1,>=0.24
+pyinstaller<7,>=6.10
