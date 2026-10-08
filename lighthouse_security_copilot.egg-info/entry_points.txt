@@ -1,2 +1,0 @@
-[console_scripts]
-lighthouse-desktop = triage.desktop:main
