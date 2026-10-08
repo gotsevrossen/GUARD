@@ -95,6 +95,39 @@ async def test_checkpoint_resumes_and_advances_only_after_success(tmp_path):
     service.process.assert_awaited_once()
 
 
+@pytest.mark.parametrize('content', ['', '{', '[]', '{"id": "7"}', 'null'])
+def test_damaged_checkpoint_is_treated_as_missing(tmp_path, content):
+    from triage.ingest.windows import read_checkpoint
+    path = tmp_path / 'cp.json'
+    path.write_text(content)
+    assert read_checkpoint(path, 'Security') is None
+    path.write_text(json.dumps({'id': 5, 'time': 't'}))
+    assert read_checkpoint(path, 'Security') == {'id': 5, 'time': 't'}
+    assert read_checkpoint(tmp_path / 'absent.json', 'Security') is None
+
+
+@pytest.mark.asyncio
+async def test_empty_checkpoint_does_not_stop_ingestion(tmp_path):
+    """Seen on a Hyper-V VM after hard resets: the checkpoint file was empty and
+    ingestion crashed on every start."""
+    checkpoint = tmp_path / (hashlib.sha256(b'Security').hexdigest()[:20] + '.json')
+    checkpoint.write_text('')
+    latest = event(3)
+    class Reader:
+        def read(self, query='*', reverse=False, count=32):
+            if reverse: return [latest]
+            if 'EventRecordID=3' in query: return [latest]
+            return []
+    task = asyncio.create_task(tail_channel(AsyncMock(), 'Security', reader=Reader(), state_dir=tmp_path, poll_seconds=.01))
+    for _ in range(100):
+        if checkpoint.read_text(): break
+        await asyncio.sleep(.01)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError): await task
+    # Re-anchored on the newest event, as on a first start.
+    assert json.loads(checkpoint.read_text())['id'] == 3
+
+
 @pytest.mark.asyncio
 async def test_log_clear_detected_with_reused_record_id(tmp_path):
     old = event(10)

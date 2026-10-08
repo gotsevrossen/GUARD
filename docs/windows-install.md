@@ -14,6 +14,9 @@ AI inference (llama.cpp) is bundled inside LightHouse. Internet access is requir
 during installation for the sensor packages, rules, the Visual C++ runtime and the
 AI model download (about 2.5 GB). Windows 10 22H2 or newer, x64, is required; local
 AI additionally needs a CPU with AVX2 (see [Local AI](#local-ai-llamacpp)).
+Plan for at least 8 GB of RAM (8192 MB on a VM, as startup memory if Dynamic Memory
+is on): the loaded model takes about 3 GB and Suricata with the full ET Open ruleset
+about 1 GB, on top of Windows itself. Below that, the services fail or thrash.
 Building also needs, on the build machine, the Visual C++ runtime and an AVX2 CPU:
 the build loads the bundled llama.cpp DLLs as a check.
 

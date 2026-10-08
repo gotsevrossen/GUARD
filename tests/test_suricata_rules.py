@@ -74,6 +74,30 @@ def test_failed_sid_with_no_active_rule_is_an_error(tmp_path):
     assert rules.main([str(rules_file), str(tmp_path / "r.txt"), str(log)]) == 2
 
 
+def test_generated_config_never_asks_windows_for_the_mtu(tmp_path):
+    """The MTU lookup crashes Suricata 8.0.7 on Hyper-V adapters."""
+    import io, json, subprocess, sys, tarfile
+    import yaml
+    vendor = tmp_path / "vendor" / "suricata.yaml"; vendor.parent.mkdir()
+    vendor.write_text(yaml.safe_dump({"vars": {"address-groups": {"HOME_NET": "[any]"}},
+                                      "pcap": [{"interface": "eth0"}, {"interface": "default"}],
+                                      "outputs": []}), encoding="utf-8")
+    archive = tmp_path / "rules.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        data = (GOOD_RULE + "\n").encode()
+        member = tarfile.TarInfo("rules/emerging-scan.rules"); member.size = len(data)
+        tar.addfile(member, io.BytesIO(data))
+    settings = tmp_path / "windows.json"; settings.write_text(json.dumps({"HomeNet": "192.168.1.10/24"}), encoding="utf-8")
+    data_root = tmp_path / "data"; (data_root / "rules").mkdir(parents=True)
+    destination = tmp_path / "suricata.yaml"
+    subprocess.run([sys.executable, str(HELPER.with_name("configure_suricata.py")), str(vendor), str(destination),
+                    str(settings), str(data_root), str(archive)], check=True)
+    config = yaml.safe_load(destination.read_text(encoding="utf-8").split("---", 1)[1])
+    assert config["default-packet-size"] == 1514
+    assert all(entry["snaplen"] == 65535 for entry in config["pcap"])
+    assert config["vars"]["address-groups"]["HOME_NET"] == "[192.168.1.0/24]"
+
+
 def test_installer_ships_and_uses_the_helper():
     windows = HELPER.parent
     assert 'Source: "disable_failed_rules.py"' in (windows / "lighthouse.iss").read_text(encoding="utf-8")

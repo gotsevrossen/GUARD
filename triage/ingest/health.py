@@ -26,7 +26,12 @@ def channel_filename(channel: str) -> str:
 def write_json(path: Path, value) -> None:
     """Replace atomically so readers never see a partial document."""
     temporary = path.with_suffix('.tmp')
-    temporary.write_text(json.dumps(value), encoding='utf-8')
+    with temporary.open('w', encoding='utf-8') as handle:
+        handle.write(json.dumps(value))
+        # Without this, a hard reset can commit the rename before the data and
+        # leave an empty file behind (seen on a Hyper-V VM).
+        handle.flush()
+        os.fsync(handle.fileno())
     temporary.replace(path)
 
 

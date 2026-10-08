@@ -124,6 +124,26 @@ class EventLogReader:
             handle.Close()
 
 
+def read_checkpoint(path: Path, channel: str) -> dict | None:
+    """The last committed event, or None to start by following new events.
+
+    A damaged checkpoint (empty after a hard reset, or not ours) must not stop
+    ingestion of every channel. Starting fresh skips only events logged while the
+    service was down; replaying the whole retained log instead could queue hours
+    of model triage on a slow CPU.
+    """
+    if not path.exists():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(value, dict) and isinstance(value.get("id"), int) and isinstance(value.get("time"), str):
+            return value
+    except (OSError, ValueError):
+        pass
+    logger.warning("Checkpoint for %s is damaged; following new events from now on", channel)
+    return None
+
+
 async def tail_channel(service, channel: str, *, reader=None, state_dir=None, poll_seconds=1):
     reader = reader or EventLogReader(channel)
     directory = Path(state_dir or health.state_directory())
@@ -131,7 +151,7 @@ async def tail_channel(service, channel: str, *, reader=None, state_dir=None, po
     path = directory / health.channel_filename(channel)
     status = health.ChannelHealth(directory, channel)
     status.set("starting")
-    cursor = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+    cursor = read_checkpoint(path, channel)
 
     while True:
         try:
