@@ -6,7 +6,10 @@ see the TriageModel interface.
 
 Lifecycle: the model is loaded lazily, on the first alert, in a worker thread, and
 then reused for every later alert. On Windows it lives in the ingestion service
-process, so API startup never waits for it. If loading fails (missing, corrupt or
+process, so API startup never waits for it. The API process loads its own copy
+only on the first "Ask LightHouse" chat request (see triage.api); llama.cpp
+memory-maps the GGUF, so both processes share the weights in the OS page cache.
+If loading fails (missing, corrupt or
 incompatible file, too little memory, unsupported CPU), alerts are still stored,
 with a result asking for a human review, and loading is retried after a pause so a
 repaired model is picked up without a restart.
@@ -117,8 +120,11 @@ def load_llama(settings: LlamaCppSettings):
     except (ImportError, OSError, RuntimeError) as error:
         # Package missing, or a native DLL or the VC++ runtime it needs is absent.
         raise ModelUnavailable(f"llama.cpp runtime could not be loaded: {error}") from error
+    # use_mmap is llama.cpp's default, spelled out because the design relies on it:
+    # the ingestion and API services each load the model, and a memory-mapped file
+    # is shared through the OS page cache instead of held twice.
     return Llama(model_path=str(path), n_ctx=settings.context_size,
-                 n_gpu_layers=settings.gpu_layers, verbose=False)
+                 n_gpu_layers=settings.gpu_layers, use_mmap=True, verbose=False)
 
 
 def parse_reply(content: str) -> TriageResult:
@@ -215,6 +221,34 @@ class LlamaCppTriageModel(TriageModel):
     def _infer_blocking(self, alert: NormalizedAlert, constrained: bool) -> TriageResult:
         with self._thread_lock:
             return run_triage(self._llama, alert, self.settings, constrained)
+
+    async def chat(self, system: str, messages: list[dict[str, str]], *,
+                   max_tokens: int, temperature: float) -> str | None:
+        """One free-text generation for "Ask LightHouse". Shares the lazy load, the
+        reload pause and both locks with triage: it is the same llama.cpp context.
+        No retry: there is no schema to fail, and a second attempt would double an
+        already slow answer."""
+        async with self._lock:
+            if not await self._ensure_loaded():
+                return None
+            try:
+                return await asyncio.to_thread(self._chat_blocking, system, messages, max_tokens, temperature)
+            except Exception as error:
+                # Includes a prompt too long for the context window; the caller
+                # shows its fixed "unavailable" reply instead of an error.
+                logger.warning("Local AI chat failed: %s", error)
+                return None
+
+    def _chat_blocking(self, system: str, messages: list[dict[str, str]], max_tokens: int,
+                       temperature: float) -> str | None:
+        with self._thread_lock:
+            response = self._llama.create_chat_completion(
+                messages=[{"role": "system", "content": system}, *messages],
+                temperature=temperature,
+                max_tokens=min(max_tokens, self.settings.max_tokens),
+            )
+        content = response["choices"][0]["message"]["content"]
+        return content if isinstance(content, str) else None
 
 
 # A representative alert for the installer's end-to-end check.

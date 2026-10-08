@@ -7,6 +7,7 @@ lighthouse_security_copilot.egg-info/entry_points.txt
 lighthouse_security_copilot.egg-info/requires.txt
 lighthouse_security_copilot.egg-info/top_level.txt
 tests/test_api_security.py
+tests/test_chat.py
 tests/test_confidence.py
 tests/test_desktop.py
 tests/test_ingest.py

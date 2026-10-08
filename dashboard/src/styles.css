@@ -245,6 +245,8 @@ main:not(.with-dock) .dock{display:none}
   position:relative;background:var(--green);color:#fff;font-size:1.15rem;cursor:pointer;overflow:visible;
   transition:background .2s ease,transform .2s ease}
 .dock form button:hover{background:var(--green-dark)}
+/* held while the local model is still answering; same treatment as .btn:disabled */
+.dock form button:disabled{opacity:.6;cursor:default;background:var(--green)}
 .dock small{display:block;padding:8px 4px 0;font-size:.72rem}
 
 /* ---- Sign-in and first-run password change ---- */

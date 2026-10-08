@@ -240,6 +240,9 @@ try {
         "LIGHTHOUSE_STATIC_DIR=$AppDir\dashboard\dist", "LIGHTHOUSE_SURICATA_PATH=$DataDir\suricata\eve.json",
         'LIGHTHOUSE_SYSMON_CHANNEL=Microsoft-Windows-Sysmon/Operational', 'LIGHTHOUSE_SECURITY_CHANNEL=Security',
         "LIGHTHOUSE_EVENT_STATE_DIR=$DataDir\state", 'LIGHTHOUSE_MODEL_BACKEND=llama_cpp',
+        # One-time admin password in a fixed, admin-only file; the service logs are
+        # rotated and renamed on every restart.
+        "LIGHTHOUSE_FIRST_RUN_DIR=$DataDir",
         "LIGHTHOUSE_MODEL_PATH=$modelPath")
     Register 'LightHouse-API' $python "-m uvicorn triage.api:app --host 127.0.0.1 --port $($config.ApiPort)" $environment
     Start-Service LightHouse-API
@@ -262,7 +265,7 @@ try {
     }
     if (!$healthy) { throw 'Event ingestion did not report fresh healthy channels. See ingestion stderr.' }
     Write-Host "LightHouse ready: http://127.0.0.1:$($config.ApiPort)"
-    Write-Host "Initial admin credential: $DataDir\logs\LightHouse-API.stdout.log"
+    Write-Host "Initial admin password (first install, until you change it): $DataDir\first-run-password.txt"
     Write-Host "Configuration: $configPath. Review HOME_NET and capture adapter for this network."
     Write-Host "Local AI model: $modelPath"
     Complete "Installation completed.$aiNote" 0

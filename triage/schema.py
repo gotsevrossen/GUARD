@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
 
 class Source(StrEnum):
@@ -233,3 +233,54 @@ class AlertDetailOwner(BaseModel):
         # `triage.reasoning`, `triage.uncertainty`, `triage.model_confidence` and
         # `triage.confidence_reasons` are dropped by validation rather than by hand.
         return cls.model_validate(detail.model_dump())
+
+
+# "Ask LightHouse" chat. The limits keep a whole request inside the local model's
+# 4,096-token context and bound how long one request can hold the single
+# llama.cpp context that every chat shares.
+CHAT_MAX_MESSAGES = 12
+CHAT_MESSAGE_MAX_CHARS = 2000
+CHAT_TITLE_QUESTION_MAX_CHARS = 500
+
+
+class ChatMessage(BaseModel):
+    """One turn of chat history as the dashboard keeps it. Both roles come from the
+    browser, so an "assistant" turn is no more trusted than a "user" one."""
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=CHAT_MESSAGE_MAX_CHARS)
+
+    @field_validator("content")
+    @classmethod
+    def not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("message must not be blank")
+        return value
+
+
+class ChatRequest(BaseModel):
+    messages: list[ChatMessage] = Field(min_length=1, max_length=CHAT_MAX_MESSAGES)
+    # Optional focus. The server reads the alert itself; the browser never supplies
+    # alert text as context.
+    alert_id: int | None = None
+
+    @model_validator(mode="after")
+    def ends_with_a_question(self) -> "ChatRequest":
+        if self.messages[-1].role != "user":
+            raise ValueError("the last message must be from the user")
+        return self
+
+
+class ChatReply(BaseModel):
+    reply: str
+    # False when the local model could not answer; `reply` is then a fixed message.
+    available: bool
+
+
+class ChatTitleRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=CHAT_TITLE_QUESTION_MAX_CHARS)
+
+
+class ChatTitle(BaseModel):
+    # None when the model is unavailable or its title failed validation; the
+    # dashboard keeps its own fallback title.
+    title: str | None

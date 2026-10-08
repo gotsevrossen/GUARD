@@ -1,7 +1,7 @@
-import { FormEvent, KeyboardEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { api, Alert, getSession, login, logout, Session } from './api';
-import { Conversation, loadConversations, newId, saveConversations, titleFor, Turn } from './conversations';
+import { api, Alert, getSession, login, logout, Session, statusOf } from './api';
+import { clip, Conversation, loadConversations, MAX_QUESTION, newId, saveConversations, titleFor, toChatMessages, Turn } from './conversations';
 import './styles.css';
 import './sidebar.css';
 
@@ -11,8 +11,18 @@ const labels: Record<string, string> = { home: 'Home', alerts: 'Alerts', trends:
 const URGENT = ['high', 'critical'];
 const PROMPTS = ['Summarize my network and security status', 'Explain what my most recent alert means', 'What should I address first?', 'Are there any unusual devices on my network?'];
 const AI_NOTE = 'Written on this appliance and checked against the alert schema. Nothing left your network.';
-/* Chat has no endpoint yet; the local model is wired up once its evaluation lands. */
-const PLACEHOLDER_REPLY = 'Chat will run on the local AI model once its evaluation is complete. Until then, open an alert for the explanation and steps LightHouse has already written for it.';
+/* The alert itself goes to the server by id, where its sensor text is fenced as
+   untrusted evidence. Its title is attacker-influenced, so it is not pasted into the
+   question, where it would reach the model as the owner's own words. */
+const ALERT_QUESTION = 'Explain this alert. What does it mean, and what should I do?';
+
+/* Chat failures are shown in the thread as a reply, never as an error screen. */
+function chatFailure(error: unknown, aboutAlert: boolean) {
+  const status = statusOf(error);
+  if (status === 401) return 'Your sign-in has expired. Sign out, sign in again, and then ask once more.';
+  if (status === 404 && aboutAlert) return 'LightHouse can no longer find the alert this chat is about, so it can’t answer here. Start a new chat instead.';
+  return 'LightHouse couldn’t answer just now. Try again in a moment.';
+}
 
 /* Fixed wording per guidance tier. The server picks the tier from the floored
    severity and the capped confidence; none of this text comes from the model or
@@ -187,7 +197,7 @@ function ChangePassword({ session, onDone }: { session: Session; onDone: (sessio
    script and stays keyboard-operable. */
 function AlertItem({ alert, showStatus, canSeeEvidence, act, ask, evidence }: {
   alert: Alert; showStatus?: boolean; canSeeEvidence: boolean;
-  act: (id: number, status: string) => void; ask: (question: string) => void; evidence: (alert: Alert) => void;
+  act: (id: number, status: string) => void; ask: Ask; evidence: (alert: Alert) => void;
 }) {
   const isOpen = alert.status === 'open';
   const tier = tierOf(alert);
@@ -235,7 +245,7 @@ function AlertItem({ alert, showStatus, canSeeEvidence, act, ask, evidence }: {
               <button className="btn quiet" onClick={() => act(alert.id, 'dismissed')}>Dismiss</button>
             </>
             : <button className="btn quiet" onClick={() => act(alert.id, 'open')}>Reopen</button>}
-          <button className="btn quiet" onClick={() => ask(`Explain this alert: ${alert.title}`)}>Ask LightHouse about this</button>
+          <button className="btn quiet" onClick={() => ask(ALERT_QUESTION, alert)}>Ask LightHouse about this</button>
           {canSeeEvidence && <button className="btn quiet" onClick={() => evidence(alert)}>Show evidence</button>}
         </div>
         <p className="ai-note">{AI_NOTE}</p>
@@ -244,9 +254,11 @@ function AlertItem({ alert, showStatus, canSeeEvidence, act, ask, evidence }: {
   );
 }
 
+/* Passing an alert always opens a new thread about that alert. */
+type Ask = (question: string, about?: Alert) => void;
 type PageProps = {
   alerts: Alert[]; canSeeEvidence: boolean;
-  act: (id: number, status: string) => void; ask: (question: string) => void; evidence: (alert: Alert) => void;
+  act: (id: number, status: string) => void; ask: Ask; evidence: (alert: Alert) => void;
 };
 
 function Home({ alerts, canSeeEvidence, act, ask, evidence }: PageProps) {
@@ -613,41 +625,76 @@ function App() {
   const [selected, setSelected] = useState<any>();
   const [chats, setChats] = useState<Conversation[]>(() => loadConversations());
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [thinking, setThinking] = useState(false);
+  /* The thread waiting on the model. One question at a time: inference is CPU-bound,
+     so a second request would only queue behind the first. The ref guards against a
+     double send landing before the state update has rendered. */
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  const pending = useRef<string | null>(null);
+  const thinking = pendingId !== null;
   const [message, setMessage] = useState('');
 
   const load = () => api.alerts().then(setAlerts).catch(() => setAlerts([]));
   useEffect(() => { if (session && !session.must_change_password) load(); }, [session]);
 
-  const keep = (next: Conversation[]) => { setChats(next); saveConversations(next); };
+  /* Every change goes through the latest state, never a render's snapshot: a reply
+     or a title can land long after the user has moved to another thread. */
+  const update = (change: (current: Conversation[]) => Conversation[]) => setChats(current => {
+    const next = change(current);
+    saveConversations(next);
+    return next;
+  });
+
+  /* The model's title replaces the fallback, but only on a thread that still exists. */
+  const nameChat = (id: string, question: string) => {
+    api.chatTitle(clip(question, MAX_QUESTION))
+      .then(title => { if (title) update(current => current.map(entry => entry.id === id ? { ...entry, title: titleFor(title) } : entry)); })
+      .catch(() => { /* the fallback title stays */ });
+  };
 
   /* A question either continues the open thread or starts a new one; either way it
      is one row in the sidebar, never one row per message. */
-  const ask = (question: string) => {
+  const ask: Ask = (question, about) => {
     const text = question.trim();
     if (!text) return;
+    if (pending.current) { setActiveId(pending.current); setTab('home'); return; }
     const turn: Turn = { role: 'me', text };
-    const existing = activeId ? chats.find(chat => chat.id === activeId) : undefined;
+    const existing = !about && activeId ? chats.find(chat => chat.id === activeId) : undefined;
     const chat: Conversation = existing
       ? { ...existing, turns: [...existing.turns, turn], updated: Date.now() }
-      : { id: newId(), title: titleFor(text), turns: [turn], updated: Date.now() };
+      : { id: newId(), title: titleFor(about?.title || text), turns: [turn], updated: Date.now(), ...(about ? { alertId: about.id } : {}) };
+    const messages = toChatMessages(chat.turns);
+    const alertId = chat.alertId ?? null;
     setActiveId(chat.id);
     setTab('home');
     setMessage('');
-    keep([chat, ...chats.filter(entry => entry.id !== chat.id)]);
-    setThinking(true);
-    /* Stands in for the local model call. The delay is what makes the reply read as
-       an answer rather than as part of the page. */
-    setTimeout(() => {
-      setThinking(false);
-      setChats(current => {
-        const next = current.map(entry => entry.id === chat.id
-          ? { ...entry, turns: [...entry.turns, { role: 'them', text: PLACEHOLDER_REPLY } as Turn], updated: Date.now() }
-          : entry);
-        saveConversations(next);
-        return next;
-      });
-    }, 550);
+    update(current => {
+      const stored = current.find(entry => entry.id === chat.id);
+      return [stored ? { ...stored, turns: [...stored.turns, turn], updated: chat.updated } : chat, ...current.filter(entry => entry.id !== chat.id)];
+    });
+    pending.current = chat.id;
+    setPendingId(chat.id);
+    void (async () => {
+      let answered = false;
+      try {
+        let reply: Turn;
+        try {
+          const result = await api.chat(messages, alertId);
+          answered = result.available;
+          /* the AI-unavailable notice is fixed server text, not the model's words */
+          reply = result.available ? { role: 'them', text: result.reply } : { role: 'them', text: result.reply, local: true };
+        } catch (failure) {
+          reply = { role: 'them', text: chatFailure(failure, alertId !== null), local: true };
+        }
+        update(current => current.map(entry => entry.id === chat.id ? { ...entry, turns: [...entry.turns, reply], updated: Date.now() } : entry));
+      } finally {
+        pending.current = null;
+        setPendingId(null);
+      }
+      /* Named after the answer, not alongside it, so the title never queues ahead of
+         the reply on the one local model. A thread opened from an alert keeps the
+         alert's name: its question is generic, so the model could not do better. */
+      if (!existing && !about && answered) nameChat(chat.id, text);
+    })();
   };
 
   const act = async (id: number, status: string) => { await api.setStatus(id, status); load(); };
@@ -660,14 +707,15 @@ function App() {
   const pageProps: PageProps = { alerts: alerts || [], canSeeEvidence, act, ask, evidence: showEvidence };
   const chat = chats.find(entry => entry.id === activeId);
   const primary = ['home', 'alerts', 'trends', ...(canSeeEvidence ? ['advanced'] : [])];
-  const send = (event: FormEvent) => { event.preventDefault(); ask(message); };
+  /* While a reply is pending the draft stays editable but is not sent. */
+  const send = (event: FormEvent) => { event.preventDefault(); if (!thinking) ask(message); };
   const keydown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); ask(message); }
+    if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); if (!thinking) ask(message); }
   };
 
   const page = () => {
     if (!alerts) return <Skeleton />;
-    if (tab === 'home') return chat ? <Thread chat={chat} thinking={thinking} /> : <Home {...pageProps} />;
+    if (tab === 'home') return chat ? <Thread chat={chat} thinking={pendingId === chat.id} /> : <Home {...pageProps} />;
     if (tab === 'alerts') return <Alerts {...pageProps} />;
     if (tab === 'trends') return <Trends alerts={alerts} />;
     if (tab === 'advanced') return <Advanced selected={selected} />;
@@ -706,7 +754,7 @@ function App() {
           <form onSubmit={send}>
             <textarea rows={1} value={message} onChange={event => setMessage(event.target.value)} onKeyDown={keydown}
               aria-label="Ask LightHouse" placeholder={chat ? 'Reply to LightHouse…' : 'Ask LightHouse about your network…'} />
-            <button type="submit" aria-label="Send chat">↑</button>
+            <button type="submit" aria-label="Send chat" disabled={thinking}>↑</button>
           </form>
           <small>LightHouse is AI, it can make mistakes. Chats stay on this appliance for your privacy.</small>
         </div>

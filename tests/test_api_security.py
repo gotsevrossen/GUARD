@@ -188,6 +188,34 @@ def test_seeded_admin_password_is_random_and_must_be_changed(tmp_path):
     assert session and session["must_change_password"] is True
 
 
+def test_windows_first_run_password_file_lives_until_the_admin_changes_it(tmp_path, monkeypatch):
+    """The Windows installer points LIGHTHOUSE_FIRST_RUN_DIR at the protected data
+    directory, because the service logs holding the banner are rotated."""
+    handoff = tmp_path / "data"; handoff.mkdir()
+    monkeypatch.setenv("LIGHTHOUSE_FIRST_RUN_DIR", str(handoff))
+    monkeypatch.delenv("LIGHTHOUSE_DESKTOP", raising=False)
+    monkeypatch.setenv("LIGHTHOUSE_DB_PATH", str(tmp_path / "first.db"))
+    monkeypatch.setenv("LIGHTHOUSE_STATIC_DIR", str(tmp_path / "no-dashboard-build"))
+    sys.modules.pop("triage.api", None)
+    try:
+        module = importlib.import_module("triage.api")
+        password_file = handoff / "first-run-password.txt"
+        password = password_file.read_text(encoding="utf-8").strip()
+        assert len(password) >= 20
+        client = TestClient(module.app)
+        token = login(client, "admin", password)
+        # Signing in is not enough; it goes when the admin sets their own password.
+        assert password_file.exists()
+        changed = client.post("/api/auth/password", headers=auth(token),
+                              json={"current_password": password, "new_password": "the-owners-own-password"})
+        assert changed.status_code == 200
+        assert not password_file.exists()
+        # A restart does not write a new one: the account already exists.
+        assert module.db.initialize() is None and not password_file.exists()
+    finally:
+        sys.modules.pop("triage.api", None)
+
+
 def test_must_change_password_blocks_normal_routes(api, client):
     api.db.create_user("newadmin", "temporary-password", "admin", must_change_password=True)
     session = client.post("/api/auth/login", json={"username": "newadmin", "password": "temporary-password"})

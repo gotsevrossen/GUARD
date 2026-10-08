@@ -18,9 +18,10 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .db import Database, PasswordTooLongError, default_db_path
+from .db import Database, PasswordTooLongError, default_db_path, discard_first_run_password
+from .llm import CHAT_CONTEXT_MAX_ALERTS, TriageModel, answer_chat, suggest_title
 from .paths import bundle_dir, is_desktop
-from .schema import AlertDetailOwner, AlertStatus
+from .schema import AlertDetailOwner, AlertStatus, ChatReply, ChatRequest, ChatTitle, ChatTitleRequest
 
 logger = logging.getLogger(__name__)
 
@@ -199,6 +200,9 @@ def change_password(body: PasswordChange, user=Depends(current_user)):
         raise HTTPException(422, f"Password must be at most {MAX_PASSWORD_LENGTH} bytes")
     # Keep this session, drop everywhere else the old password is still logged in.
     db.revoke_user_sessions(user["id"], except_token=user["token"])
+    if user["username"] == "admin":
+        # The seeded admin's one-time password is now useless; don't leave it on disk.
+        discard_first_run_password()
     return {"ok": True}
 
 
@@ -250,6 +254,71 @@ def set_preference(body: Setting, user=Depends(require(*ALL_ROLES))):
     if body.key not in {"notification_threshold", "alert_sensitivity"}: raise HTTPException(422, "Unsupported preference")
     db.set_user_setting(user["username"], body.key, body.value)
     return {"ok": True}
+
+
+# Built on the first chat request, never at import or startup: the installer waits
+# on /api/health, and API startup must stay fast. Building is cheap; the runtime
+# itself loads the weights lazily, on the first chat it answers.
+#
+# On Windows the API and ingestion run as separate services, so this is a second
+# model in a second process. llama.cpp memory-maps the GGUF (use_mmap), so the two
+# processes share the ~2.5 GB of weights through the OS page cache instead of
+# holding two copies; only the KV cache for the context window is per process.
+_chat_model: TriageModel | None = None
+
+
+def chat_model() -> TriageModel | None:
+    """The cached chat model, or None when it cannot even be configured."""
+    global _chat_model
+    if _chat_model is None:
+        try:
+            # Imported here for the same reason as in _ingestion_task.
+            from .main import build_model
+            _chat_model = build_model(mock=False)
+        except Exception as error:
+            # Misconfiguration (an unknown backend, a bad numeric setting) must not
+            # turn a chat into a 500; the dashboard shows the fixed unavailable text.
+            logger.error("Local AI chat is unavailable: %s", error)
+            return None
+    return _chat_model
+
+
+def _chat_alerts(alert_id: int | None) -> list[AlertDetailOwner] | None:
+    """Alert context for a chat, in the owner-safe shape for every role. None when
+    the requested alert does not exist.
+
+    The owner shape even for analysts: chat answers are written for the owner, and
+    raw records, rule ids and analyst reasoning are exactly the attacker-written or
+    analyst-only text the prompt must not carry.
+    """
+    if alert_id is not None:
+        detail = db.get_alert(alert_id)
+        return None if detail is None else [AlertDetailOwner.from_detail(detail)]
+    rows = db.list_alerts(status=str(AlertStatus.OPEN))
+    # Stable sort: newest first stays the order within each group, get-help first,
+    # matching the dashboard's own ordering.
+    rows.sort(key=lambda row: row["guidance_tier"] != "get_help")
+    alerts = []
+    for row in rows[:CHAT_CONTEXT_MAX_ALERTS]:
+        detail = db.get_alert(row["id"])
+        if detail is not None:
+            alerts.append(AlertDetailOwner.from_detail(detail))
+    return alerts
+
+
+@app.post("/api/chat", response_model=ChatReply)
+async def chat(body: ChatRequest, user=Depends(require(*ALL_ROLES))) -> ChatReply:
+    alerts = await asyncio.to_thread(_chat_alerts, body.alert_id)
+    if alerts is None: raise HTTPException(404, "Alert not found")
+    # Inference runs in a worker thread inside the model runtime; this await keeps
+    # the event loop, and so every other dashboard request, responsive meanwhile.
+    reply, available = await answer_chat(chat_model(), body.messages, alerts, focused=body.alert_id is not None)
+    return ChatReply(reply=reply, available=available)
+
+
+@app.post("/api/chat/title", response_model=ChatTitle)
+async def chat_title(body: ChatTitleRequest, user=Depends(require(*ALL_ROLES))) -> ChatTitle:
+    return ChatTitle(title=await suggest_title(chat_model(), body.question))
 
 
 @app.get("/api/advanced/health")

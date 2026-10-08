@@ -17,10 +17,24 @@ OutputBaseFilename=LightHouse-Setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+; Artwork is rendered by make-installer-art.ps1 from the dashboard logo and tokens.
+SetupIconFile=art\lighthouse.ico
+WizardImageFile=art\wizard-100.png,art\wizard-200.png
+WizardSmallImageFile=art\header-100.png,art\header-200.png
+; The welcome page carries the plain-English "what this does" and requirements.
+DisableWelcomePage=no
 SetupLogging=yes
 CloseApplications=no
-UninstallDisplayIcon={app}\runtime\python.exe
+UninstallDisplayIcon={app}\lighthouse.ico
+[Messages]
+WelcomeLabel1=Welcome to LightHouse
+WelcomeLabel2=LightHouse watches your network and this computer for security problems and explains what it finds in plain English. Nothing leaves this computer.%n%nSetup downloads the monitoring tools and the local AI model (about 2.5 GB), so stay connected to the internet.%n%nOne extra window opens for Npcap. Tick "WinPcap API-compatible mode" there.%n%nLightHouse needs at least 8 GB of memory.
+FinishedHeadingLabel=LightHouse is ready
+FinishedLabel=LightHouse is monitoring in the background and starts with Windows.%n%nOpen the dashboard any time from the Start menu or the desktop shortcut, or go to http://127.0.0.1:8000 in your browser.%n%nSign in as admin. Your one-time password is in first-run-password.txt in the ProgramData\LightHouse folder. Read it from PowerShell run as administrator ("First sign-in" in the README has the command). It is deleted once you choose your own password.
+[Tasks]
+Name: "desktopicon"; Description: "Put a LightHouse Dashboard shortcut on the desktop"
 [Files]
+Source: "art\lighthouse.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "install.ps1"; DestDir: "{app}\setup"; Flags: ignoreversion
 Source: "security.ps1"; DestDir: "{app}\setup"; Flags: ignoreversion
@@ -29,15 +43,34 @@ Source: "configure_suricata.py"; DestDir: "{app}\setup"; Flags: ignoreversion
 Source: "disable_failed_rules.py"; DestDir: "{app}\setup"; Flags: ignoreversion
 Source: "uninstall.ps1"; DestDir: "{app}\setup"; Flags: ignoreversion
 [Icons]
-Name: "{group}\LightHouse Dashboard"; Filename: "http://127.0.0.1:8000"
+Name: "{group}\LightHouse Dashboard"; Filename: "http://127.0.0.1:8000"; IconFilename: "{app}\lighthouse.ico"
+Name: "{autodesktop}\LightHouse Dashboard"; Filename: "http://127.0.0.1:8000"; IconFilename: "{app}\lighthouse.ico"; Tasks: desktopicon
 Name: "{group}\LightHouse Logs"; Filename: "{commonappdata}\LightHouse\logs"
+[Run]
+; Offered only when dependency setup succeeded; postinstall entries run as the
+; signed-in user, so the browser does not open elevated.
+Filename: "http://127.0.0.1:8000"; Description: "Open the LightHouse dashboard"; Flags: postinstall shellexec nowait skipifsilent; Check: SetupSucceeded
 [UninstallRun]
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\setup\uninstall.ps1"" -AppDir ""{app}"""; Flags: runhidden waituntilterminated; RunOnceId: "RemoveServices"
 [Code]
+const
+  // --green (#2A9679) as a BGR TColor: the dashboard's sidebar rail colour.
+  BrandGreen = $0079962A;
 var SetupFailed: Boolean;
 function GetCustomSetupExitCode: Integer;
 begin
   if SetupFailed then Result := 1 else Result := 0;
+end;
+function SetupSucceeded: Boolean;
+begin
+  Result := not SetupFailed;
+end;
+procedure InitializeWizard;
+begin
+  // Green page header with white titles, like the dashboard's sidebar.
+  WizardForm.MainPanel.Color := BrandGreen;
+  WizardForm.PageNameLabel.Font.Color := clWhite;
+  WizardForm.PageDescriptionLabel.Font.Color := clWhite;
 end;
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var Code: Integer;
@@ -55,7 +88,9 @@ var Code: Integer; Args: String; FailureDetail: AnsiString; Detail: String;
 begin
   if CurStep = ssPostInstall then begin
     SetupFailed := True;
-    WizardForm.StatusLabel.Caption := 'Installing sensors and downloading the local AI model (about 2.5 GB). This can take several minutes...';
+    // Two short lines: each label is a single line and clipped, not wrapped.
+    WizardForm.StatusLabel.Caption := 'Setting up the sensors and the local AI...';
+    WizardForm.FilenameLabel.Caption := 'The AI model is about 2.5 GB. This can take several minutes.';
     Args := '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\setup\install.ps1') + '" -AppDir "' + ExpandConstant('{app}') + '"';
     if WizardSilent then Args := Args + ' -Unattended';
     if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Args, '', SW_HIDE, ewWaitUntilTerminated, Code) then

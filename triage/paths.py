@@ -71,6 +71,16 @@ def data_dir() -> Path:
     return directory
 
 
+def first_run_handoff_configured() -> bool:
+    """True when an installer chose where the one-time password goes.
+
+    The Windows installer sets LIGHTHOUSE_FIRST_RUN_DIR to the Administrators/
+    SYSTEM-only data directory: its services log to files that NSSM rotates and
+    renames on every restart, so the stdout banner alone is easy to lose there.
+    """
+    return bool(os.getenv("LIGHTHOUSE_FIRST_RUN_DIR", "").strip())
+
+
 def first_run_password_path() -> Path:
     """Where the one-time admin password is handed over on first run.
 

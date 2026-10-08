@@ -52,9 +52,14 @@ The application payload may already be installed, but that is not a running stac
 - AI model (GGUF): `C:\ProgramData\LightHouse\models\microsoft_Phi-4-mini-instruct-Q4_K_M.gguf`.
 - Installer transcript: `C:\ProgramData\LightHouse\logs\install.log`.
 - Last setup result: `C:\Program Files\LightHouse\setup\last-result.txt`.
-- Initial `admin` password: `C:\ProgramData\LightHouse\logs\LightHouse-API.stdout.log` (including rotated copies).
+- Initial `admin` password: `C:\ProgramData\LightHouse\first-run-password.txt`, written
+  on the first start only (`LIGHTHOUSE_FIRST_RUN_DIR`) and deleted when the admin
+  sets their own password. It is also printed once to `logs\LightHouse-API.stdout.log`,
+  but NSSM renames that log on every service restart, so search `LightHouse-API*`.
 
-Read the credential log using an elevated editor/terminal. The existing generated
+Read it from an elevated terminal: `Get-Content "$env:ProgramData\LightHouse\first-run-password.txt"`.
+Do not browse there in File Explorer and accept its "Continue" prompt, which
+permanently grants your account access to the protected folder. The generated
 password banner and mandatory first-login password change are unchanged. Data,
 configuration, model storage and logs have an Administrators/SYSTEM-only ACL.
 API startup initializes the database before ingestion starts, so the credential

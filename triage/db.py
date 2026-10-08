@@ -12,7 +12,7 @@ from typing import Any
 import bcrypt
 
 from .dedupe import fingerprint
-from .paths import data_dir, first_run_password_path, is_desktop
+from .paths import data_dir, first_run_handoff_configured, first_run_password_path, is_desktop
 from .guidance import guidance_tier
 from .schema import AlertDetail, AlertStatus, AssessedTriage, NormalizedAlert
 
@@ -98,8 +98,10 @@ def _write_first_run_password(password: str) -> None:
     On the appliance the operator reads it from the journal, which is fine for
     someone already at a terminal. The desktop app has no terminal to read, so the
     password is written 0600 to the per-user data directory and the desktop entry
-    point displays it and deletes it. It is written only in desktop mode, and only
-    on the single run that generates it.
+    point displays it and deletes it. It is written only in desktop mode or when an
+    installer configured the handoff directory (Windows), and only on the single
+    run that generates it. On Windows it stays until the admin replaces the
+    password; see discard_first_run_password.
     """
     path = first_run_password_path()
     # 0600 at creation time, and O_NOFOLLOW where the platform has it, so the
@@ -120,6 +122,21 @@ def _write_first_run_password(password: str) -> None:
     except OSError:
         # A failed write is not fatal: the banner on stdout is still the source
         # of truth, and the account can be re-provisioned.
+        pass
+
+
+def discard_first_run_password() -> None:
+    """Delete the one-time password file once it has stopped being useful.
+
+    Called after the seeded admin chooses their own password: from then on the
+    file is only a stale credential on disk. Never raises; a leftover file holds a
+    password that no longer works.
+    """
+    if not (is_desktop() or first_run_handoff_configured()):
+        return
+    try:
+        first_run_password_path().unlink(missing_ok=True)
+    except OSError:
         pass
 
 
@@ -174,7 +191,7 @@ class Database:
         self._restrict_permissions()
         if seeded:
             _print_seed_banner(seeded)
-            if is_desktop():
+            if is_desktop() or first_run_handoff_configured():
                 _write_first_run_password(seeded)
         return seeded
 
