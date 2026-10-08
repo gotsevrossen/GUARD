@@ -22,3 +22,8 @@ dashboard/*.tsbuildinfo
 
 # Packaging metadata regenerated from pyproject.toml by every install/build.
 *.egg-info/
+
+# Personal Purdue GenAI Studio key and model choice: never commit.
+genai-key.bin
+genai-key.tmp
+genai.json

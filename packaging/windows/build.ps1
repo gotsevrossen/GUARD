@@ -33,11 +33,18 @@ try {
         if (!(Test-Path "$stage\runtime\Lib\site-packages\llama_cpp\lib\$dll")) { throw "llama.cpp runtime file missing from payload: $dll" }
     }
     & "$stage\runtime\python.exe" -c 'import llama_cpp; print(llama_cpp.__version__, llama_cpp.llama_print_system_info().decode())'; Check-Exit
+    # The owner's Purdue GenAI Studio key is personal and must never ship, even by accident.
+    $secrets = Get-ChildItem $stage -Recurse -Force -Include 'genai-key*', 'genai.json' -ErrorAction SilentlyContinue
+    if ($secrets) { throw "Refusing to build: a GenAI Studio key file is in the payload: $($secrets.FullName -join ', ')" }
     $compiler = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
     if (!$compiler) {
         & winget install --id JRSoftware.InnoSetup --exact --source winget --silent --scope user --accept-source-agreements --accept-package-agreements; Check-Exit
         $compiler = "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
     }
     & $compiler /Qp "/DPayloadDir=$stage" "$PSScriptRoot\lighthouse.iss"; Check-Exit
-    Get-FileHash "$repo\dist\LightHouse-Setup.exe" -Algorithm SHA256
+    # Attach both files to the GitHub release: the dashboard's "Update now" installs
+    # only an installer whose SHA-256 matches this file (triage/updates.py).
+    $hash = Get-FileHash "$repo\dist\LightHouse-Setup.exe" -Algorithm SHA256
+    "$($hash.Hash.ToLowerInvariant())  LightHouse-Setup.exe" | Set-Content "$repo\dist\LightHouse-Setup.exe.sha256" -Encoding ascii
+    $hash
 } finally { Pop-Location }

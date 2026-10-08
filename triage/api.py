@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import platform
+import sys
 import shutil
 import sqlite3
 from contextlib import asynccontextmanager
@@ -20,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .db import Database, PasswordTooLongError, default_db_path, discard_first_run_password
-from .llm import CHAT_CONTEXT_MAX_ALERTS, TriageModel, answer_chat, stream_chat, suggest_title
+from .llm import CHAT_CONTEXT_MAX_ALERTS, TriageModel, answer_chat, stream_chat, suggest_title, warm_chat
 from .paths import bundle_dir, is_desktop
 from .schema import AlertDetailOwner, AlertStatus, ChatReply, ChatRequest, ChatTitle, ChatTitleRequest
 
@@ -77,6 +78,45 @@ async def _ingestion_task() -> None:
         logger.exception("Live ingestion stopped; the API keeps serving without it.")
 
 
+CHAT_PRELOAD_DELAY_SECONDS = 30
+
+
+async def _preload_chat() -> None:
+    """Load the local chat model and pre-read its instructions and the current
+    alerts shortly after the service starts, so the owner's first question does not
+    wait for either. Skipped when GenAI Studio answers chat or monitoring is
+    paused (the owner asked for the laptop to be left alone). Never raises."""
+    try:
+        await asyncio.sleep(CHAT_PRELOAD_DELAY_SECONDS)
+        from .llm import warm_chat
+        from .monitoring import status
+        if _uses_genai_studio() or status(_services)["paused"]:
+            return
+        model = chat_model()
+        if model is not None:
+            await warm_chat(model, await asyncio.to_thread(_chat_alerts, None) or [], focused=False)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.warning("Chat preload failed; the first question will load the model instead", exc_info=True)
+
+
+UPDATE_CLEANUP_DELAY_SECONDS = 10 * 60
+
+
+async def _cleanup_after_update() -> None:
+    """Remove the one-time update task and installer once setup has surely finished
+    (setup restarts this service before it exits). Never raises."""
+    try:
+        await asyncio.sleep(UPDATE_CLEANUP_DELAY_SECONDS)
+        from .updates import cleanup
+        await asyncio.to_thread(cleanup)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.warning("Update cleanup failed", exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Start background ingestion alongside the API, desktop build only.
@@ -85,9 +125,14 @@ async def lifespan(app: FastAPI):
     and its own systemd unit, so nothing starts here for it.
     """
     task = asyncio.create_task(_ingestion_task(), name="ingestion") if is_desktop() else None
+    background = [asyncio.create_task(_preload_chat(), name="chat-preload"),
+                  asyncio.create_task(_cleanup_after_update(), name="update-cleanup")] \
+        if sys.platform == "win32" else []
     try:
         yield
     finally:
+        for job in background:
+            job.cancel()
         if task is not None:
             task.cancel()
             # Belt and braces alongside the task's own handler: shutting the window
@@ -266,22 +311,171 @@ def set_preference(body: Setting, user=Depends(require(*ALL_ROLES))):
 # processes share the ~2.5 GB of weights through the OS page cache instead of
 # holding two copies; only the KV cache for the context window is per process.
 _chat_model: TriageModel | None = None
+# The local runtime, kept across model switches so its loaded weights are reused.
+_local_chat_model: TriageModel | None = None
+# Whether a GenAI Studio key file existed when _chat_model was built.
+_chat_key_stored = False
 
 
 def chat_model() -> TriageModel | None:
     """The cached chat model, or None when it cannot even be configured."""
-    global _chat_model
+    global _chat_model, _local_chat_model, _chat_key_stored
+    stored = _genai_key_stored()
+    if _chat_model is not None and stored != _chat_key_stored:
+        # A key was stored or cleared since: follow it now, not at the next service
+        # restart. Above all, a cleared key must stop questions going out at once
+        # (the cached GenAI Studio model holds the key in memory).
+        _chat_model = None
     if _chat_model is None:
-        try:
-            # Imported here for the same reason as in _ingestion_task.
-            from .main import build_model
-            _chat_model = build_model(mock=False)
-        except Exception as error:
-            # Misconfiguration (an unknown backend, a bad numeric setting) must not
-            # turn a chat into a 500; the dashboard shows the fixed unavailable text.
-            logger.error("Local AI chat is unavailable: %s", error)
-            return None
+        if _local_chat_model is None:
+            try:
+                # Imported here for the same reason as in _ingestion_task.
+                from .main import build_model
+                _local_chat_model = build_model(mock=False)
+            except Exception as error:
+                # Misconfiguration (an unknown backend, a bad numeric setting) must not
+                # turn a chat into a 500; the dashboard shows the fixed unavailable text.
+                logger.error("Local AI chat is unavailable: %s", error)
+                return None
+        _chat_model, _chat_key_stored = _with_genai_studio(_local_chat_model), stored
     return _chat_model
+
+
+def _with_genai_studio(local: TriageModel) -> TriageModel:
+    """Opt-in: with a stored Purdue GenAI Studio key, and unless an admin chose to
+    keep chat on this computer, chat answers come from GenAI Studio with the local
+    model as the fallback. Otherwise nothing leaves this computer."""
+    from .cloud_key import load
+    from .cloud_model import LOCAL_CHOICE, PurdueChatModel, genai_model_name
+    model = genai_model_name()
+    key = load() if model != LOCAL_CHOICE else None
+    if not key:
+        return local
+    logger.info("Chat answers come from Purdue GenAI Studio (%s); alert triage stays local", model)
+    return PurdueChatModel(local, key, model)
+
+
+def _genai_key_stored() -> bool:
+    from .cloud_key import key_path
+    return key_path().is_file()
+
+
+def _uses_genai_studio() -> bool:
+    from .cloud_model import LOCAL_CHOICE, genai_model_name
+    return _genai_key_stored() and genai_model_name() != LOCAL_CHOICE
+
+
+@app.get("/api/chat/provider")
+def chat_provider(user=Depends(require(*ALL_ROLES))) -> dict[str, str]:
+    """Who answers chat, so the dashboard can say whether questions leave this
+    computer. Taken from the model that will actually answer, not from settings on
+    disk, so the footer cannot say "local" while questions still go out."""
+    from .cloud_model import PurdueChatModel
+    return {"provider": "purdue" if isinstance(chat_model(), PurdueChatModel) else "local"}
+
+
+def _windows_services():
+    """The real Service Control Manager on Windows; None elsewhere (dev, tests)."""
+    if sys.platform != "win32":
+        return None
+    from .monitoring import WindowsServices
+    return WindowsServices()
+
+
+_services = _windows_services()
+
+
+class MonitoringChange(BaseModel):
+    paused: bool
+
+
+@app.get("/api/monitoring")
+def monitoring_status(user=Depends(require(*ALL_ROLES))) -> dict:
+    """Whether monitoring is running, so every role sees when it is paused."""
+    from .monitoring import status
+    return status(_services)
+
+
+@app.post("/api/monitoring")
+def change_monitoring(body: MonitoringChange, user=Depends(require("admin"))) -> dict:
+    """Pause (e.g. taking the laptop home) or resume background monitoring. Admin
+    only: a paused monitor is exactly what an intruder would want."""
+    global _chat_model, _local_chat_model
+    from .monitoring import pause, resume, status
+    if not status(_services)["available"]:
+        raise HTTPException(409, "Monitoring services are not installed on this computer")
+    try:
+        if body.paused:
+            pause(_services)
+            # Free the chat AI's memory too; it reloads on the next question.
+            _chat_model = _local_chat_model = None
+        else:
+            resume(_services)
+    except PermissionError:
+        # Only the installed LightHouse-API service (SYSTEM) may do this, not a
+        # copy someone started by hand.
+        raise HTTPException(403, "Only the installed LightHouse app can pause or resume monitoring. "
+                                 "This copy is not running as the LightHouse service.")
+    except Exception:
+        logger.exception("Could not %s monitoring", "pause" if body.paused else "resume")
+        raise HTTPException(502, "Windows could not change the LightHouse services. Try again, or restart the computer.")
+    logger.warning("Monitoring %s by %s", "paused" if body.paused else "resumed", user["username"])
+    return status(_services)
+
+
+@app.get("/api/updates")
+async def update_check(user=Depends(require("admin"))) -> dict:
+    """Whether a newer LightHouse release exists on GitHub (checked at most every
+    15 minutes; sends nothing about this computer). Admins install updates."""
+    from .updates import check
+    return await check()
+
+
+@app.post("/api/updates/install", status_code=202)
+async def update_install(user=Depends(require("admin"))) -> dict:
+    """Download the newer release, verify its SHA-256 and install it silently (see
+    triage/updates.py). Admin only: it replaces the code every service runs as
+    SYSTEM. Progress comes back on GET /api/updates as `install`."""
+    from .updates import start_install
+    try:
+        state = await start_install()
+    except PermissionError:
+        raise HTTPException(403, "Only the installed LightHouse app can install updates. "
+                                 "This copy is not running as the LightHouse service.")
+    logger.warning("Update requested by %s", user["username"])
+    return state
+
+
+class ChatModelChoice(BaseModel):
+    model: str = Field(min_length=1, max_length=64)
+
+
+@app.get("/api/chat/models")
+def chat_models(user=Depends(require("admin"))) -> dict:
+    """The curated chat models an admin may choose from, and the current one."""
+    from .cloud_key import key_path
+    from .cloud_model import GENAI_MODEL_CHOICES, genai_model_name
+    return {"choices": GENAI_MODEL_CHOICES, "current": genai_model_name(), "key_configured": key_path().is_file()}
+
+
+@app.put("/api/chat/model")
+def set_chat_model(body: ChatModelChoice, user=Depends(require("admin"))) -> dict:
+    """Switch the chat model; takes effect on the next question, no restart. Only
+    the curated choices, since this decides where owners' questions are sent."""
+    global _chat_model
+    from .cloud_key import key_path, save_model
+    from .cloud_model import GENAI_MODEL_CHOICES, LOCAL_CHOICE
+    if body.model not in {choice["id"] for choice in GENAI_MODEL_CHOICES}:
+        raise HTTPException(422, "Not one of the available chat models")
+    if os.getenv("LIGHTHOUSE_GENAI_MODEL", "").strip():
+        # The service setting wins over this choice; saying "switched" would be false,
+        # and for "On this computer only" questions would still leave the machine.
+        raise HTTPException(409, "The chat model is fixed by the LIGHTHOUSE_GENAI_MODEL service setting")
+    if body.model != LOCAL_CHOICE and not key_path().is_file():
+        raise HTTPException(409, "Set a Purdue GenAI Studio key first (see the README)")
+    save_model(body.model)
+    _chat_model = None  # rebuilt on the next question, around the same local runtime
+    return {"ok": True, "current": body.model}
 
 
 def _chat_alerts(alert_id: int | None) -> list[AlertDetailOwner] | None:
@@ -335,6 +529,21 @@ async def chat_stream(body: ChatRequest, user=Depends(require(*ALL_ROLES))) -> S
 
     # no-store: an answer about this network must not sit in any cache.
     return StreamingResponse(events(), media_type="application/x-ndjson", headers={"Cache-Control": "no-store"})
+
+
+class ChatWarm(BaseModel):
+    alert_id: int | None = None
+
+
+@app.post("/api/chat/warm")
+async def chat_warm(body: ChatWarm, user=Depends(require(*ALL_ROLES))) -> dict[str, bool]:
+    """Called when the owner starts typing: the model reads the instructions and the
+    alert context it will need, so the answer starts sooner. Same owner-safe context
+    as /api/chat. Cheap to repeat (an unchanged prompt is already read) and skipped
+    while the model is busy."""
+    alerts = await asyncio.to_thread(_chat_alerts, body.alert_id)
+    if alerts is None: raise HTTPException(404, "Alert not found")
+    return {"warmed": await warm_chat(chat_model(), alerts, focused=body.alert_id is not None)}
 
 
 @app.post("/api/chat/title", response_model=ChatTitle)

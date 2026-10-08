@@ -110,6 +110,9 @@ async def run_ingestion(service: TriageService, configured: dict[Source, Path]) 
     """
     tasks = [asyncio.create_task(_tail_source(service, source, path), name=str(source))
              for source, path in configured.items()]
+    # Load the model now, not when the first alert arrives; it waits its turn on
+    # the model lock, so it never delays an alert that gets there first.
+    tasks.append(asyncio.create_task(service.model.preload(), name="model-preload"))
     if sys.platform == "win32":
         from .ingest.windows import configured_channels, tail_channel
         tasks.extend(asyncio.create_task(tail_channel(service, channel), name=channel)

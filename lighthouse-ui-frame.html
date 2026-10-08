@@ -798,7 +798,7 @@
         <h1>Technical<br>workspace</h1>
         <p class="lede">Raw evidence and model reasoning behind each triaged alert. Analyst and admin only.</p>
         <section class="cards">
-          <div><small>Events ingested</small><strong>18.4k</strong><p>Suricata, Zeek and Wazuh, last 24 hours.</p></div>
+          <div><small>Events ingested</small><strong>18.4k</strong><p>Suricata, Sysmon and Windows Security, last 24 hours.</p></div>
           <div><small>Model latency</small><strong>1.9s</strong><p>Median, qwen3:8b on this appliance.</p></div>
           <div><small>Validation failures</small><strong>3</strong><p>Model output rejected by the schema.</p></div>
         </section>
@@ -829,7 +829,7 @@
         <table class="list">
           <tbody>
             <tr><th>Downgrade</th><th>Why</th></tr>
-            <tr><td><b>unfamiliar_rule</b></td><td>Rule 60204 from wazuh is not in LightHouse&rsquo;s tested set.</td></tr>
+            <tr><td><b>unfamiliar_rule</b></td><td>Rule Microsoft-Windows-Security-Auditing:4740 from the Windows event log is not in LightHouse&rsquo;s tested set.</td></tr>
           </tbody>
         </table>
         <h3>What the model could not determine</h3>
@@ -870,9 +870,9 @@
         </div>
         <h3>Monitoring sources</h3>
         <div class="panel">
-          <div class="field"><div><b>Suricata</b><p>eve.json &mdash; alert events</p></div><span class="pill">Connected</span></div>
-          <div class="field"><div><b>Zeek</b><p>conn, dns and notice logs, JSON output</p></div><span class="pill">Connected</span></div>
-          <div class="field"><div><b>Wazuh</b><p>alerts.json export</p></div><span class="pill">Connected</span></div>
+          <div class="field"><div><b>Suricata</b><p>Network traffic: known attacks and suspicious connections</p></div><span class="pill">Connected</span></div>
+          <div class="field"><div><b>Sysmon</b><p>This computer: programs starting, network connections, file and registry changes</p></div><span class="pill">Connected</span></div>
+          <div class="field"><div><b>Windows Security log</b><p>Sign-ins, failed sign-ins, account changes and cleared logs</p></div><span class="pill">Connected</span></div>
         </div>
         <div class="row-end"><button class="btn">Save preferences</button></div>
       </div>

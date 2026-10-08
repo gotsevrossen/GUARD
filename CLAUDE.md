@@ -1,6 +1,8 @@
 # LightHouse — Local AI Security Copilot
 
-LightHouse is a Windows desktop app that gives small-business owners SOC-style security monitoring with no security background required and no cloud. It collects alerts from local sensors, triages each one with an on-device LLM, and shows plain-English explanations and one concrete next step in a desktop dashboard. **No monitoring data or AI inference ever leaves the user's machine.** Treat that as a hard product requirement, not a preference.
+LightHouse is a Windows desktop app that gives small-business owners SOC-style security monitoring with no security background required and no cloud. It collects alerts from local sensors, triages each one with an on-device LLM, and shows plain-English explanations and one concrete next step in a desktop dashboard. **Monitoring data and alert triage never leave the user's machine.** Treat that as a hard product requirement, not a preference.
+
+**One owner-approved, opt-in exception (2026-10-08):** when an admin stores a Purdue GenAI Studio API key (`python -m triage.cloud_key set`), *chat* answers come from GenAI Studio (`triage/cloud_model.py`): the question plus the same owner-safe, fenced alert context. Triage stays local; GenAI Studio failures fall back to the local model; the dashboard footer says when answers come from GenAI Studio. The key lives only DPAPI-encrypted in the admin-only data folder and goes only to `genai.rcac.purdue.edu`. Without a key, nothing leaves the machine. Don't widen this (no triage, no other providers) without asking.
 
 ## Platform: Windows only
 
@@ -115,7 +117,7 @@ The frame was signed off. **Match it strictly.** Reuse the existing tokens, comp
 
 Currently a front-end stub (`setTimeout` placeholder in `main.tsx`, history in localStorage via `conversations.ts`). The goal is to **wire it to the same on-device model** used for triage.
 
-- Answers come from the local llama.cpp runtime only. No cloud API, ever.
+- Answers come from the local llama.cpp runtime, or from Purdue GenAI Studio only when the owner stored a key (see the exception at the top). No other cloud API.
 - Add a backend route (e.g. `POST /api/chat`) behind `require(*ALL_ROLES)`. Reuse the loaded model behind the model abstraction instead of loading a second copy.
 - Any alert data included as context is attacker-controlled: fence it with the same `<untrusted_evidence>` handling as `build_prompt`, and cap its length.
 - Respect roles: an owner's chat context must not include `raw`, `rule_id` or `reasoning`.
@@ -129,6 +131,19 @@ Currently a front-end stub (`setTimeout` placeholder in `main.tsx`, history in l
 - Add or update tests in `tests/` for any change to parsing, triage, auth, roles or the installer. Run `python -m pytest` before calling a change done.
 - Keep changes small and surgical; don't refactor unrelated code.
 - **Never run `git commit`, `git push` or other history-changing git commands.** Make the file changes and leave committing to me.
+
+## Working with subagents
+
+When a prompt has several parts, split them across parallel subagents instead of doing them one after another, to finish sooner.
+
+- **Split by area.** Give each agent one part plus the files or folders it owns, e.g. backend in `triage/`, dashboard in `dashboard/src/`, installer in `packaging/windows/`. Some overlap is fine, such as a shared file one agent only reads or a test file both add to.
+- **One owner per edit.** If two parts need to change the same lines (for example the same function in `main.tsx` or `api.py`), give both to one agent, or do that part yourself after the agents finish. Never have two agents edit the same lines at once.
+- **Keep small or tightly linked work inline.** If one part needs another part's result first, or a part is only a quick edit, do it yourself instead of spawning an agent.
+- **Brief every agent fully.** Agents start without this conversation, so each brief includes:
+  - the relevant rules from this file (security rules, the design frame, Windows-only, no git commits);
+  - the "no testing on the owner's machine" rule (no installers, GUI windows or browsers);
+  - what "done" means for its part.
+- **Check the combined result yourself.** After the agents finish, review their changes together, fix any conflicts, then run `python -m pytest`, `npm run build` and `npm test` once on the combined work before reporting.
 
 ## Known gaps
 

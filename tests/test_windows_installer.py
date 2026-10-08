@@ -20,6 +20,16 @@ def test_everything_follows_the_chosen_install_folder():
     assert '$env:SystemDrive\\Suricata"; ApiPort' not in install
 
 
+def test_upgrades_replace_the_payload_but_never_the_data():
+    """A leftover old .dist-info made an updated install report its old version."""
+    iss = (WINDOWS / 'lighthouse.iss').read_text(encoding='utf-8')
+    section = iss[iss.index('[InstallDelete]'):iss.index('[Files]')]
+    assert 'Type: filesandordirs; Name: "{app}\\runtime"' in section
+    assert 'Type: filesandordirs; Name: "{app}\\dashboard"' in section
+    for kept in ('data', 'Suricata', 'tools', 'setup'):
+        assert f'{{app}}\\{kept}' not in section
+
+
 def test_install_folder_is_locked_before_anything_runs_from_it():
     iss = (WINDOWS / 'lighthouse.iss').read_text(encoding='utf-8')
     install = (WINDOWS / 'install.ps1').read_text(encoding='utf-8')

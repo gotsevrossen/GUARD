@@ -1,6 +1,6 @@
 import { FormEvent, KeyboardEvent, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { api, Alert, getSession, login, logout, Session, statusOf } from './api';
+import { api, Alert, ChatModels, getSession, login, logout, Monitoring, Session, statusOf, UpdateInfo } from './api';
 import { clip, Conversation, loadConversations, MAX_QUESTION, newId, saveConversations, titleFor, toChatMessages, Turn } from './conversations';
 import './styles.css';
 import './sidebar.css';
@@ -259,24 +259,32 @@ type Ask = (question: string, about?: Alert) => void;
 type PageProps = {
   alerts: Alert[]; canSeeEvidence: boolean;
   act: (id: number, status: string) => void; ask: Ask; evidence: (alert: Alert) => void;
+  /* Background monitoring: shown to everyone; the switch is passed only to admins. */
+  monitoring?: Monitoring | null; monitoringBusy?: boolean; toggleMonitoring?: () => void;
 };
 
-function Home({ alerts, canSeeEvidence, act, ask, evidence }: PageProps) {
+function Home({ alerts, canSeeEvidence, act, ask, evidence, monitoring, monitoringBusy, toggleMonitoring }: PageProps) {
   const open = alerts.filter(alert => alert.status === 'open');
   const urgent = open.filter(alert => URGENT.includes(alert.severity)).length;
+  const paused = !!monitoring?.paused;
   return (
     <div>
       <section className="welcome">
         <p className="eyebrow">Network overview</p>
         <h1>{urgent ? <>{urgent} item{urgent === 1 ? '' : 's'} deserve{urgent === 1 ? 's' : ''}<br />your attention</> : <>Your network<br />looks healthy</>}</h1>
         <div className="health">
-          <i className={urgent ? 'warn' : ''} />
-          <b>{urgent ? 'Attention needed' : 'Monitoring active'}</b>
-          <small>{open.length} open alert{open.length === 1 ? '' : 's'}</small>
+          <i className={paused ? 'off' : urgent ? 'warn' : ''} />
+          <b>{paused ? 'Monitoring paused' : urgent ? 'Attention needed' : 'Monitoring active'}</b>
+          <small>{paused ? 'Not watching this computer or network until resumed' : `${open.length} open alert${open.length === 1 ? '' : 's'}`}</small>
+          {toggleMonitoring && monitoring?.available && (
+            <button className="btn quiet" type="button" disabled={monitoringBusy} onClick={toggleMonitoring}>
+              {monitoringBusy ? 'Working…' : paused ? 'Resume monitoring' : 'Pause monitoring'}
+            </button>
+          )}
         </div>
       </section>
       <section className="cards lead">
-        <div><small>Health status</small><strong>{urgent ? 'Review alerts' : 'Good'}</strong><p>Monitoring sources are ready to report.</p></div>
+        <div><small>Health status</small><strong>{paused ? 'Paused' : urgent ? 'Review alerts' : 'Good'}</strong><p>{paused ? 'Monitoring is switched off for now.' : 'Monitoring sources are ready to report.'}</p></div>
         <div><small>Open alerts</small><strong>{open.length}</strong><p>Items that have not been resolved.</p></div>
         <div><small>High priority</small><strong>{urgent}</strong><p>Potentially urgent activity.</p></div>
       </section>
@@ -300,10 +308,12 @@ function Home({ alerts, canSeeEvidence, act, ask, evidence }: PageProps) {
    the water bobs, and an arc runs round the rim like a loading ring. Brand greens
    only; static under reduced motion. Each swell spans two periods of the 26-unit
    circle, so sliding it one period loops seamlessly. */
-function WaveMark() {
+function WaveMark({ label = 'LightHouse is replying' }: { label?: string | null }) {
   const clip = `wave-clip-${useId().replace(/:/g, '')}`;
+  // label null: decorative, where text beside it already announces the progress.
+  const a11y = label === null ? { 'aria-hidden': true } : { role: 'status', 'aria-label': label };
   return (
-    <span className="mark wave-mark" role="status" aria-label="LightHouse is replying">
+    <span className="mark wave-mark" {...a11y}>
       <svg viewBox="0 0 26 26" aria-hidden="true" focusable="false">
         <defs><clipPath id={clip}><circle cx="13" cy="13" r="11" /></clipPath></defs>
         <circle className="tank" cx="13" cy="13" r="11" />
@@ -323,22 +333,50 @@ function WaveMark() {
 
 const paragraphs = (text: string) => text.split(/\n+/).map((line, index) => <p key={index}>{line}</p>);
 
+/* Said beside the loader while LightHouse works, a little like a progress log: the
+   first lines say what is actually happening, the rest keep the wait company. */
+const THINKING_LINES = ['Checking the evidence…', 'Weighing how serious it is…', 'Scanning the horizon…',
+  'Polishing the lens…', 'Charting safe waters…', 'Putting it in plain English…'];
+
+function ThinkingWords({ provider, aboutAlert }: { provider: string; aboutAlert: boolean }) {
+  const lines = useMemo(() => [
+    provider === 'purdue' ? 'Asking Purdue GenAI Studio…' : 'Waking the local AI…',
+    aboutAlert ? 'Reading this alert…' : 'Reading your recent alerts…',
+    ...THINKING_LINES,
+    ...(provider === 'purdue' ? [] : ['Thinking on this computer. This can take a minute…']),
+  ], [provider, aboutAlert]);
+  const [index, setIndex] = useState(0);
+  /* The two "what is happening" lines show once; after that the rest loop. */
+  useEffect(() => {
+    const timer = setInterval(() => setIndex(current => (current + 1 < lines.length ? current + 1 : 2)), 2600);
+    return () => clearInterval(timer);
+  }, [lines]);
+  /* aria-hidden: the loader's own status label speaks; a line every few seconds would be noise. */
+  return <span className="thinking-words" aria-hidden="true">{lines[index]}</span>;
+}
+
 /* An open conversation. Nothing labels the speaker: a question sits in its own
    card on the right, the answer runs as plain text on the left. While the model
-   writes, its words appear as they arrive and its dot is the animated WaveMark. */
-function Thread({ chat, thinking, streamed }: { chat: Conversation; thinking: boolean; streamed: string }) {
+   works, the animated WaveMark and a status line sit above its words as they
+   arrive; once the answer is complete, only the text remains. */
+function Thread({ chat, thinking, streamed, provider }: { chat: Conversation; thinking: boolean; streamed: string; provider: string }) {
   return (
     <div>
       <p className="eyebrow">Chat</p>
       <h2>{chat.title}</h2>
       <div className="thread">
         {chat.turns.map((turn, index) => (
-          <div className={`turn ${turn.role}`} key={index}>
-            {turn.role === 'them' && <span className="mark" aria-hidden="true" />}
-            {paragraphs(turn.text)}
-          </div>
+          <div className={`turn ${turn.role}`} key={index}>{paragraphs(turn.text)}</div>
         ))}
-        {thinking && <div className="turn them"><WaveMark />{streamed.trim() && paragraphs(streamed.trimStart())}</div>}
+        {thinking && (
+          <div className="turn them">
+            <div className="thinking">
+              <WaveMark />
+              {!streamed.trim() && <ThinkingWords provider={provider} aboutAlert={chat.alertId !== undefined} />}
+            </div>
+            {streamed.trim() && paragraphs(streamed.trimStart())}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -557,9 +595,10 @@ function Settings() {
       </div>
       <h3>Monitoring sources</h3>
       <div className="panel">
-        <div className="field"><div><b>Suricata</b><p>eve.json &mdash; alert events</p></div><span className="pill">Configured</span></div>
-        <div className="field"><div><b>Zeek</b><p>conn, dns and notice logs, JSON output</p></div><span className="pill">Configured</span></div>
-        <div className="field"><div><b>Wazuh</b><p>alerts.json export</p></div><span className="pill">Configured</span></div>
+        {/* What the Windows install actually reads. Zeek and Wazuh were the Linux build's sensors. */}
+        <div className="field"><div><b>Suricata</b><p>Network traffic: known attacks and suspicious connections</p></div><span className="pill">Configured</span></div>
+        <div className="field"><div><b>Sysmon</b><p>This computer: programs starting, network connections, file and registry changes</p></div><span className="pill">Configured</span></div>
+        <div className="field"><div><b>Windows Security log</b><p>Sign-ins, failed sign-ins, account changes and cleared logs</p></div><span className="pill">Configured</span></div>
       </div>
       {saved && <p className="notice" role="status">{saved}</p>}
     </div>
@@ -568,8 +607,25 @@ function Settings() {
 
 type User = { id: number; username: string; role: string; must_change_password: boolean };
 
-function Admin({ session }: { session: Session }) {
+function Admin({ session, onProviderChange }: { session: Session; onProviderChange: (provider: string) => void }) {
   const [users, setUsers] = useState<User[] | null>(null);
+  /* Which model answers chat. Admin only, because it decides whether owners'
+     questions leave this computer; the server accepts only its curated list. */
+  const [models, setModels] = useState<ChatModels | null>(null);
+  const [modelNotice, setModelNotice] = useState('');
+  useEffect(() => { api.chatModels().then(setModels).catch(() => setModels(null)); }, []);
+  const chooseModel = async (id: string) => {
+    setModelNotice('');
+    try {
+      await api.setChatModel(id);
+      setModels(current => current && { ...current, current: id });
+      onProviderChange(id === 'local' ? 'local' : 'purdue');
+      const label = models?.choices.find(choice => choice.id === id)?.label || id;
+      setModelNotice(`Chat now uses ${label}, from the next question on.`);
+    } catch (failure) {
+      setModelNotice(detailOf(failure, 'Could not change the chat model.'));
+    }
+  };
   const [adding, setAdding] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -635,10 +691,28 @@ function Admin({ session }: { session: Session }) {
       ) : <div className="row-end"><button className="btn" onClick={() => setAdding(true)}>Add user</button></div>}
       {notice && <p className="notice" role="status">{notice}</p>}
 
+      <h3>Chat AI</h3>
+      <div className="panel">
+        <div className="field">
+          <div><b>Who answers chat</b><p>{models?.key_configured
+            ? 'Purdue GenAI Studio models answer online, in seconds. Your alerts always stay on this computer.'
+            : 'Add a Purdue GenAI Studio key to use its faster models (see the README). Until then, chat runs on this computer.'}</p></div>
+          {models && (
+            <select aria-label="Chat model" value={models.key_configured ? models.current : 'local'} onChange={event => chooseModel(event.target.value)}>
+              {!models.choices.some(choice => choice.id === models.current) && <option value={models.current}>{models.current}</option>}
+              {models.choices.map(choice => (
+                <option key={choice.id} value={choice.id} disabled={choice.id !== 'local' && !models.key_configured}>{choice.label}: {choice.note}</option>
+              ))}
+            </select>
+          )}
+        </div>
+      </div>
+      {modelNotice && <p className="notice" role="status">{modelNotice}</p>}
+
       <h3>Appliance</h3>
       <div className="panel">
         <div className="field"><div><b>Platform</b><p>The host this appliance is running on.</p></div><span className="pill">{health.platform || 'unknown'}</span></div>
-        <div className="field"><div><b>Model</b><p>Runs locally on this computer, no external calls.</p></div><span className="pill">{health.model || '—'}</span></div>
+        <div className="field"><div><b>Model</b><p>Triages alerts on this computer, no external calls.</p></div><span className="pill">{health.model || '—'}</span></div>
         <div className="field"><div><b>Load average</b><p>1 / 5 / 15 minutes.</p></div><span className="pill">{loads(health)}</span></div>
         <div className="field"><div><b>Disk free</b><p>Retention trims raw events after 30 days.</p></div><span className="pill">{gigabytes(health.disk_free_bytes)}</span></div>
       </div>
@@ -659,6 +733,7 @@ function App() {
      double send landing before the state update has rendered. */
   const [pendingId, setPendingId] = useState<string | null>(null);
   const pending = useRef<string | null>(null);
+  const warmedAt = useRef<Record<string, number>>({});
   const thinking = pendingId !== null;
   /* The answer so far, while it streams in. Kept out of the stored conversations
      until it is complete, so localStorage is written once per answer, not per word. */
@@ -667,6 +742,33 @@ function App() {
 
   const load = () => api.alerts().then(setAlerts).catch(() => setAlerts([]));
   useEffect(() => { if (session && !session.must_change_password) load(); }, [session]);
+  /* Who answers chat: 'purdue' once the owner stored a GenAI Studio key, else local. */
+  const [provider, setProvider] = useState('local');
+  useEffect(() => {
+    if (session && !session.must_change_password) api.chatProvider().then(setProvider).catch(() => setProvider('local'));
+  }, [session]);
+  /* Background monitoring, and the admin's switch to pause it (e.g. leaving the office). */
+  const [monitoring, setMonitoring] = useState<Monitoring | null>(null);
+  const [monitoringBusy, setMonitoringBusy] = useState(false);
+  useEffect(() => {
+    if (session && !session.must_change_password) api.monitoring().then(setMonitoring).catch(() => setMonitoring(null));
+  }, [session]);
+  const toggleMonitoring = async () => {
+    if (!monitoring) return;
+    const pausing = !monitoring.paused;
+    if (pausing && !window.confirm('Pause monitoring? LightHouse will stop watching your network and this computer until you resume it, even after a restart.')) return;
+    setMonitoringBusy(true);
+    try { setMonitoring(await api.setMonitoring(pausing)); }
+    catch (failure) { window.alert(detailOf(failure, 'LightHouse could not change monitoring. Try again.')); }
+    finally { setMonitoringBusy(false); }
+  };
+  /* Checked on every load of the dashboard (the server caches GitHub's answer);
+     admins are the ones who can install, so only they are asked. */
+  const [release, setRelease] = useState<UpdateInfo | null>(null);
+  useEffect(() => {
+    if (session?.role === 'admin' && !session.must_change_password)
+      api.updates().then(info => setRelease(info.available ? info : null)).catch(() => setRelease(null));
+  }, [session]);
 
   /* Every change goes through the latest state, never a render's snapshot: a reply
      or a title can land long after the user has moved to another thread. */
@@ -745,23 +847,35 @@ function App() {
   if (session.must_change_password) return <ChangePassword session={session} onDone={setSession} />;
 
   const canSeeEvidence = advanced(session.role);
-  const pageProps: PageProps = { alerts: alerts || [], canSeeEvidence, act, ask, evidence: showEvidence };
+  const pageProps: PageProps = { alerts: alerts || [], canSeeEvidence, act, ask, evidence: showEvidence, monitoring, monitoringBusy,
+    toggleMonitoring: session.role === 'admin' ? toggleMonitoring : undefined };
   const chat = chats.find(entry => entry.id === activeId);
   const primary = ['home', 'alerts', 'trends', ...(canSeeEvidence ? ['advanced'] : [])];
   /* While a reply is pending the draft stays editable but is not sent. */
   const send = (event: FormEvent) => { event.preventDefault(); if (!thinking) ask(message); };
+  /* Clicking into the composer lets the local model read its instructions and the
+     alert context while the owner types, so the answer only waits on the question.
+     At most once a minute per conversation context, never during an answer. */
+  const warm = () => {
+    if (thinking) return;
+    const key = String(chat?.alertId ?? 'general');
+    const now = Date.now();
+    if (now - (warmedAt.current[key] || 0) < 60_000) return;
+    warmedAt.current[key] = now;
+    api.chatWarm(chat?.alertId ?? null);
+  };
   const keydown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); if (!thinking) ask(message); }
   };
 
   const page = () => {
     if (!alerts) return <Skeleton />;
-    if (tab === 'home') return chat ? <Thread chat={chat} thinking={pendingId === chat.id} streamed={pendingId === chat.id ? streamed : ''} /> : <Home {...pageProps} />;
+    if (tab === 'home') return chat ? <Thread chat={chat} thinking={pendingId === chat.id} streamed={pendingId === chat.id ? streamed : ''} provider={provider} /> : <Home {...pageProps} />;
     if (tab === 'alerts') return <Alerts {...pageProps} />;
     if (tab === 'trends') return <Trends alerts={alerts} />;
     if (tab === 'advanced') return <Advanced selected={selected} />;
     if (tab === 'settings') return <Settings />;
-    if (tab === 'admin') return <Admin session={session} />;
+    if (tab === 'admin') return <Admin session={session} onProviderChange={setProvider} />;
     return null;
   };
 
@@ -793,14 +907,94 @@ function App() {
         <div className="sheet">{page()}</div>
         <div className="dock">
           <form onSubmit={send}>
-            <textarea rows={1} value={message} onChange={event => setMessage(event.target.value)} onKeyDown={keydown}
+            <textarea rows={1} value={message} onChange={event => setMessage(event.target.value)} onKeyDown={keydown} onFocus={warm}
               aria-label="Ask LightHouse" placeholder={chat ? 'Reply to LightHouse…' : 'Ask LightHouse about your network…'} />
             <button type="submit" aria-label="Send chat" disabled={thinking}>↑</button>
           </form>
-          <small>LightHouse is AI, it can make mistakes. Chats stay on this appliance for your privacy.</small>
+          {/* Says plainly where a question goes: the owner opted in to GenAI Studio. */}
+          <small>{provider === 'purdue'
+            ? 'LightHouse is AI, it can make mistakes. Answers by Purdue GenAI Studio (online); your alerts stay on this computer.'
+            : 'LightHouse is AI, it can make mistakes. Chats stay on this computer for your privacy.'}</small>
         </div>
       </main>
+      {release && <UpdateDialog info={release} onClose={() => setRelease(null)} />}
     </div>
+  );
+}
+
+/* Shown on each load while a newer release exists. A native modal dialog: focus is
+   trapped and Esc closes it without script of our own. "Update now" has the server
+   download, verify and install the release (triage/updates.py); the page follows
+   along and reloads once LightHouse is back. The release-page link is the server's,
+   checked again here to be this project's GitHub releases page. */
+const RELEASES = 'https://github.com/gotsevrossen/LightHouse/releases/';
+const UPDATE_POLL_MS = 3000;
+const UPDATE_GIVE_UP_MS = 30 * 60 * 1000;
+type UpdatePhase = 'offer' | 'downloading' | 'installing' | 'restarting' | 'failed' | 'slow';
+const UPDATE_STEP: Record<UpdatePhase, string> = {
+  offer: '',
+  downloading: 'Downloading the update and checking it is genuine…',
+  installing: 'Installing. LightHouse closes for a few minutes and comes back on its own.',
+  restarting: 'Installing. LightHouse closes for a few minutes and comes back on its own.',
+  failed: '',
+  slow: 'This is taking longer than expected. Reload this page in a few minutes.',
+};
+function UpdateDialog({ info, onClose }: { info: UpdateInfo; onClose: () => void }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  // The server says "failed" on load when the last update from here did not take.
+  const [phase, setPhase] = useState<UpdatePhase>(info.install?.state === 'failed' ? 'failed' : 'offer');
+  const [error, setError] = useState(info.install?.state === 'failed' ? info.install.error || '' : '');
+  useEffect(() => { if (dialog.current && !dialog.current.open) dialog.current.showModal(); }, []);
+  const busy = phase === 'downloading' || phase === 'installing' || phase === 'restarting';
+  useEffect(() => {
+    if (!busy) return;
+    let stopped = false;
+    let wentDown = false;
+    const started = Date.now();
+    const tick = async () => {
+      if (stopped) return;
+      if (Date.now() - started > UPDATE_GIVE_UP_MS) { setPhase('slow'); return; }
+      if (!wentDown) {
+        try {
+          const state = (await api.updates()).install;
+          if (state?.state === 'failed') { setError(state.error || 'The update could not be installed.'); setPhase('failed'); return; }
+          if (state?.state === 'installing') setPhase('installing');
+        } catch { wentDown = true; setPhase('restarting'); }
+      } else if (await api.serverUp()) { window.location.reload(); return; }
+      if (!stopped) window.setTimeout(tick, UPDATE_POLL_MS);
+    };
+    const timer = window.setTimeout(tick, UPDATE_POLL_MS);
+    return () => { stopped = true; window.clearTimeout(timer); };
+  }, [busy]);
+  const install = async () => {
+    setError('');
+    try {
+      const state = await api.installUpdate();
+      setPhase(state.state === 'installing' ? 'installing' : 'downloading');
+    } catch (failure) { setError(detailOf(failure, 'LightHouse could not start the update. Try again.')); setPhase('failed'); }
+  };
+  const openPage = () => {
+    if (info.url?.startsWith(RELEASES)) window.open(info.url, '_blank', 'noopener');
+    dialog.current?.close();
+  };
+  return (
+    <dialog ref={dialog} className="update" onClose={onClose} onCancel={event => { if (busy) event.preventDefault(); }} aria-labelledby="update-title">
+      <p className="eyebrow">{busy ? 'Updating' : 'Update available'}</p>
+      <h2 id="update-title">LightHouse {info.latest}</h2>
+      {phase === 'offer' && <p>You have {info.current}. {info.installable
+        ? 'LightHouse can download and install it for you; your alerts, accounts and settings are kept.'
+        : 'Download the new installer and run it; your alerts, accounts and settings are kept.'}</p>}
+      {busy && <div className="update-step"><WaveMark label={null} /><p role="status">{UPDATE_STEP[phase]}</p></div>}
+      {phase === 'slow' && <p role="status">{UPDATE_STEP[phase]}</p>}
+      {phase === 'failed' && <p role="status">{error}</p>}
+      {!busy && <div className="row-end">
+        <button className="btn quiet" type="button" onClick={() => dialog.current?.close()}>Later</button>
+        {phase === 'failed' && info.installable && <button className="btn quiet" type="button" onClick={openPage}>Open release page</button>}
+        {info.installable && phase !== 'slow'
+          ? <button className="btn" type="button" onClick={install}>{phase === 'failed' ? 'Try again' : 'Update now'}</button>
+          : <button className="btn" type="button" onClick={openPage}>Open release page</button>}
+      </div>}
+    </dialog>
   );
 }
 

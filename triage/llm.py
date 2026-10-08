@@ -28,8 +28,8 @@ _FENCE_PATTERN = re.compile(r"</?\s*untrusted_evidence\s*>", re.IGNORECASE)
 SYSTEM_PROMPT = """You triage security alerts for a small-business owner with no security background.
 Respond only with JSON: severity (low|medium|high|critical|unknown), confidence (high|medium|low),
 explanation (2-3 plain-English sentences), recommended_action (one concrete step), optional reasoning
-(technical evidence for an analyst) and optional uncertainty (one or two sentences on what you could not
-determine, for an analyst).
+(at most two sentences of technical evidence for an analyst) and optional uncertainty (one or two sentences
+on what you could not determine, for an analyst).
 
 Confidence is how sure you are of your severity and explanation:
 - high: the evidence clearly shows what happened and you recognise this kind of alert.
@@ -57,8 +57,8 @@ reasoning and treat it as a reason the alert is more serious, not less."""
 CHAT_SYSTEM_PROMPT = """You are LightHouse, a security copilot running entirely on this computer, helping a
 small-business owner with no security background.
 
-Answer in short, plain English and explain any technical word. Where it helps, end with one concrete next
-step. Say when you are not sure: never claim more certainty than you have, and never invent devices,
+Answer in short, plain English and explain any technical word. Keep it brief: usually two to five sentences,
+unless the owner asks for more. Where it helps, end with one concrete next step. Say when you are not sure: never claim more certainty than you have, and never invent devices,
 addresses, files or events that are not in the alert details. For anything that could be a serious incident
 (a break-in, ransomware, stolen data or money), give no detailed repair steps; recommend the owner's IT
 provider or a security professional.
@@ -203,6 +203,16 @@ class TriageModel(ABC):
         if text:
             yield text
 
+    async def preload(self) -> bool:
+        """Get ready to answer (load weights) before the first use. Never raises."""
+        return False
+
+    async def warm(self, system: str, messages: list[dict[str, str]]) -> bool:
+        """Read a prompt ahead of the question, so the answer only has to read the
+        question itself. True when it did. A runtime with nothing to keep warm
+        (the default) does nothing. Never raises."""
+        return False
+
 
 def unavailable_result(reason: str) -> TriageResult:
     """Stored when no validated model output exists; asks for a human review."""
@@ -256,7 +266,8 @@ class FixtureTriageModel(TriageModel):
 #
 # Budget for the 4,096-token context (roughly 3-4 characters per token): system
 # prompt ~700 tokens, alert context <= ~800, history <= ~1,700, reply <= 450.
-CHAT_REPLY_MAX_TOKENS = 450
+# Short answers finish sooner on a CPU; the prompt asks for a few sentences.
+CHAT_REPLY_MAX_TOKENS = 300
 CHAT_TEMPERATURE = 0.3
 TITLE_MAX_TOKENS = 16
 TITLE_TEMPERATURE = 0.2
@@ -442,6 +453,21 @@ async def answer_chat(model: TriageModel | None, history: list[ChatMessage],
     elif any(needs_help(alert) for alert in alerts):
         reply = f"{reply}\n\n{OPEN_GET_HELP_NOTE}"
     return reply, True
+
+
+async def warm_chat(model: TriageModel | None, alerts: list[AlertDetailOwner], focused: bool) -> bool:
+    """Have the model read the system prompt and the alert context while the owner
+    is still typing. The next question's prompt starts with exactly these turns, so
+    llama.cpp then reads only the question. Never raises."""
+    if model is None:
+        return False
+    opening = [{"role": "user", "content": build_chat_context(alerts, focused)},
+               {"role": "assistant", "content": CONTEXT_ACK}]
+    try:
+        return await model.warm(CHAT_SYSTEM_PROMPT, opening)
+    except Exception as error:
+        logger.warning("Local AI warm-up failed: %s", error)
+        return False
 
 
 async def stream_chat(model: TriageModel | None, history: list[ChatMessage],

@@ -53,6 +53,22 @@ async function chatStream(messages:ChatMessage[], alertId:number|null, onDelta:(
     throw new Error('Chat stream ended early');
   } finally { clearTimeout(timer); }
 }
+/* Asks the local model to read its instructions and the alert context while the owner types; fire-and-forget, failures change nothing. */
+function chatWarm(alertId:number|null):void { request('/api/chat/warm',{method:'POST',body:JSON.stringify({alert_id:alertId})}).catch(()=>{}); }
 async function chatTitle(question:string):Promise<string|null> { const body=await request('/api/chat/title',{method:'POST',body:JSON.stringify({question})}); return body && typeof body==='object' && typeof body.title==='string' && body.title.trim() ? body.title : null; }
 
-export const api = { chat, chatStream, chatTitle, alerts:()=>request('/api/alerts'), detail:(id:number)=>request(`/api/alerts/${id}`), trends:()=>request('/api/trends'), preferences:()=>request('/api/preferences'), setPreference:(key:string,value:string)=>request('/api/preferences',{method:'PUT',body:JSON.stringify({key,value})}), health:()=>request('/api/advanced/health'), devices:()=>request('/api/advanced/devices'), setStatus:(id:number,status:string)=>request(`/api/alerts/${id}/status`,{method:'PATCH',body:JSON.stringify({status})}), users:()=>request('/api/users'), createUser:(username:string,password:string,role:string)=>request('/api/users',{method:'POST',body:JSON.stringify({username,password,role})}), changePassword:async (current_password:string,new_password:string):Promise<Session|null>=>{ const result=await request('/api/auth/password',{method:'POST',body:JSON.stringify({current_password,new_password})}); const next = isSession(result) ? result as Session : session ? { ...session, must_change_password:false } : null; persist(next); return next; } };
+async function chatProvider():Promise<string> { const body=await request('/api/chat/provider'); return body && body.provider==='purdue' ? 'purdue' : 'local'; }
+export type ChatModelChoice = { id:string; label:string; note:string };
+export type ChatModels = { choices:ChatModelChoice[]; current:string; key_configured:boolean };
+const chatModels = ():Promise<ChatModels> => request('/api/chat/models');
+const setChatModel = (model:string) => request('/api/chat/model',{method:'PUT',body:JSON.stringify({model})});
+export type Monitoring = { available:boolean; paused:boolean };
+export type InstallState = { state:'idle'|'downloading'|'installing'|'failed'; error:string|null };
+export type UpdateInfo = { current:string; latest:string|null; available:boolean; url:string|null; installable?:boolean; install?:InstallState };
+const monitoring = ():Promise<Monitoring> => request('/api/monitoring');
+const setMonitoring = (paused:boolean):Promise<Monitoring> => request('/api/monitoring',{method:'POST',body:JSON.stringify({paused})});
+const updates = ():Promise<UpdateInfo> => request('/api/updates');
+const installUpdate = ():Promise<InstallState> => request('/api/updates/install',{method:'POST'});
+/* True once the API answers again; setup stops it while it replaces the files. */
+async function serverUp():Promise<boolean> { try { return (await fetch('/health',{cache:'no-store'})).ok; } catch { return false; } }
+export const api = { monitoring, setMonitoring, updates, installUpdate, serverUp,chat, chatStream, chatTitle, chatWarm, chatProvider, chatModels, setChatModel, alerts:()=>request('/api/alerts'), detail:(id:number)=>request(`/api/alerts/${id}`), trends:()=>request('/api/trends'), preferences:()=>request('/api/preferences'), setPreference:(key:string,value:string)=>request('/api/preferences',{method:'PUT',body:JSON.stringify({key,value})}), health:()=>request('/api/advanced/health'), devices:()=>request('/api/advanced/devices'), setStatus:(id:number,status:string)=>request(`/api/alerts/${id}/status`,{method:'PATCH',body:JSON.stringify({status})}), users:()=>request('/api/users'), createUser:(username:string,password:string,role:string)=>request('/api/users',{method:'POST',body:JSON.stringify({username,password,role})}), changePassword:async (current_password:string,new_password:string):Promise<Session|null>=>{ const result=await request('/api/auth/password',{method:'POST',body:JSON.stringify({current_password,new_password})}); const next = isSession(result) ? result as Session : session ? { ...session, must_change_password:false } : null; persist(next); return next; } };

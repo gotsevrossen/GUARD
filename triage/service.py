@@ -130,8 +130,11 @@ def apply_confidence_cap(alert: NormalizedAlert, result: TriageResult) -> tuple[
     if result.unavailable:
         cap(Confidence.LOW, "model_unavailable", "No validated model output; kept for human review.")
     if (alert.source, alert.rule_id or "") not in KNOWN_RULES:
+        # Windows events reuse the Wazuh alert shape internally; name what they are.
+        origin = ("the Windows event log" if (alert.rule_id or "").startswith("Microsoft-Windows-")
+                  else str(alert.source).capitalize())
         cap(Confidence.MEDIUM, "unfamiliar_rule",
-            f"Rule {alert.rule_id or '(none)'} from {alert.source} is not in LightHouse's tested set.")
+            f"Rule {alert.rule_id or '(none)'} from {origin} is not in LightHouse's tested set.")
     evidence_chars = len(evidence_excerpt(alert))
     if evidence_chars < THIN_EVIDENCE_CHARS:
         cap(Confidence.MEDIUM, "thin_evidence",

@@ -303,3 +303,31 @@ def test_thread_setting(monkeypatch):
     monkeypatch.setenv("LIGHTHOUSE_MODEL_THREADS", "lots")
     with pytest.raises(ValueError, match="LIGHTHOUSE_MODEL_THREADS"):
         LlamaCppSettings.from_env()
+
+
+# --- speed: flash attention and preloading ---------------------------------------
+
+def test_flash_attention_is_used_and_falls_back(monkeypatch, tmp_path):
+    import types
+    calls = []
+    class Llama:
+        def __init__(self, model_path, flash_attn=False, **options):
+            calls.append(flash_attn)
+            if flash_attn and reject:
+                raise ValueError("flash attention not supported")
+    monkeypatch.setattr(local_model, "cpu_supported", lambda: True)
+    monkeypatch.setitem(sys.modules, "llama_cpp", types.SimpleNamespace(Llama=Llama))
+    settings = LlamaCppSettings(model_path=gguf(tmp_path / "m.gguf"), threads=4)
+    reject = False
+    load_llama(settings)
+    assert calls == [True]
+    reject, calls[:] = True, []
+    load_llama(settings)
+    assert calls == [True, False], "a build without flash attention must still load"
+
+
+def test_preload_loads_the_model_once(tmp_path):
+    model, loads = model_with(FakeLlama(json.dumps(VALID)), tmp_path)
+    assert asyncio.run(model.preload()) is True
+    assert asyncio.run(model.preload()) is True
+    assert len(loads) == 1

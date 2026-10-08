@@ -59,6 +59,10 @@ NTFS drive. Below, `<app>` is that folder and `<data>` is `<app>\data`.
 - Event Log checkpoints: `<data>\state`.
 - AI model (GGUF): `<data>\models\microsoft_Phi-4-mini-instruct-Q4_K_M.gguf`.
 - Installer transcript: `<data>\logs\install.log`.
+- Dashboard updates ("Update now"): the verified installer and its task script in `<data>\updates`,
+  run once as SYSTEM by the scheduled task `LightHouse-Update`; setup log in
+  `<data>\logs\update-install.log`. The API removes the task and the downloaded files
+  10 minutes after it next starts.
 - Last setup result: `<app>\setup\last-result.txt`.
 - Initial `admin` password: `<data>\first-run-password.txt`, written
   on the first start only (`LIGHTHOUSE_FIRST_RUN_DIR`) and deleted when the admin
@@ -254,6 +258,8 @@ installers. Honor a dependency's reported reboot requirement.
 | LIGHTHOUSE_MODEL_PATH | unset; installer sets the GGUF path under `models` |
 | LIGHTHOUSE_MODEL_CONTEXT_SIZE | `4096` tokens |
 | LIGHTHOUSE_MODEL_GPU_LAYERS | `0` (CPU only; see Local AI) |
+| LIGHTHOUSE_GENAI_KEY_FILE | `<data>\config\genai-key.bin`: the DPAPI-encrypted Purdue GenAI Studio key (opt-in chat, `python -m triage.cloud_key set`; see README) |
+| LIGHTHOUSE_GENAI_MODEL | the model saved with `cloud_key model`, else `gpt-oss:120b` |
 | LIGHTHOUSE_MODEL_THREADS | automatic: one thread per physical core, skipping the separate low-power core island of hybrid laptop CPUs (Intel Core Ultra). Set `"ModelThreads": N` in `windows.json` and rerun setup to override; compare values with `python -m triage.local_model smoke-test --threads N` |
 
 The background triage service runs at below-normal CPU priority, so a chat the

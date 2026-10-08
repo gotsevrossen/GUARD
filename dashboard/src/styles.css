@@ -48,6 +48,14 @@ p{line-height:1.55}
 .health{display:flex;align-items:center;gap:10px;margin-top:20px;font-size:.95rem}
 .health i,.dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--green)}
 .health i.warn{background:var(--sev-high)}
+/* paused monitoring: grey, never the reassuring green */
+.health i.off{background:var(--muted)}
+.health .btn{margin-left:auto}
+
+/* update prompt: a native modal dialog styled as one of the frame's white cards */
+dialog.update{max-width:460px;padding:28px 30px;border:0;border-radius:var(--r-md);background:var(--paper);color:var(--ink)}
+dialog.update::backdrop{background:color-mix(in srgb,var(--ink) 35%,transparent)}
+dialog.update p:not(.eyebrow){color:var(--muted);line-height:1.55}
 .health small{margin-left:6px}
 
 .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:28px 0}
@@ -151,6 +159,14 @@ p{line-height:1.55}
    the rim like a loading ring. Brand tokens only (tints mixed from --green). The
    swells slide exactly one period (26 user units = 26px) so the loop is seamless. */
 .thread .turn.them .wave-mark{background:transparent;border-radius:0}
+/* The same mark beside "Updating…" in the update dialog; 26px like the chat's, as
+   the swell loop depends on it. */
+.update-step{display:flex;align-items:center;gap:12px}
+.update-step .wave-mark{display:block;width:26px;height:26px;flex:0 0 auto}
+/* loader row: the wave mark plus a short line saying what is going on */
+.thread .turn.them .thinking{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+.thread .turn.them .thinking .mark{margin-bottom:0;flex:0 0 auto}
+.thinking-words{font-size:.85rem;color:var(--muted)}
 .wave-mark svg{display:block;width:100%;height:100%;overflow:visible}
 .wave-mark .tank{fill:color-mix(in srgb,var(--green) 14%,var(--paper))}
 .wave-mark .rim{fill:none;stroke:color-mix(in srgb,var(--green) 30%,transparent);stroke-width:2}

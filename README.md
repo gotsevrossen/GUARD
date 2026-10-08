@@ -121,6 +121,26 @@ The chat box at the bottom of Home answers questions using the same on-device AI
 
 The first question after a restart takes longer, while the AI loads.
 
+### Optional: faster, smarter chat with Purdue GenAI Studio
+
+If you have a Purdue GenAI Studio account, chat can use its much larger models running on Purdue's servers. A short answer takes about 2 seconds, instead of a minute or more on a laptop processor. This is **off unless you turn it on**, and it only applies to chat: alert triage always stays on this computer. When it's on, your question and the plain-English details of the alerts it's about go to Purdue's servers. They run on Purdue's own hardware and aren't used to train models. The chat box's footer says when answers come from GenAI Studio. If Purdue can't be reached, chat falls back to the local AI.
+
+To turn it on, open **PowerShell as administrator** and run:
+
+```powershell
+$app = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' | Where-Object DisplayName -like 'LightHouse*').InstallLocation
+& "$app\runtime\python.exe" -m triage.cloud_key set        # paste your key; it isn't shown
+# Ingestion depends on the API service, so -Force restarts both; then bring
+# ingestion back if it was running (it stays off while monitoring is paused).
+$ingest = (Get-Service LightHouse-Ingestion).Status
+Restart-Service LightHouse-API -Force
+if ($ingest -eq 'Running') { Start-Service LightHouse-Ingestion }
+```
+
+Then choose the model on the **Admin** page, under **Chat AI**. The choices are GPT-OSS 120B (recommended), Gemma 4 26B (fastest), Llama 3.3 70B, Llama 4, or **On this computer only**, which keeps chat local even with a key stored. A change applies from the next question, with no restart needed.
+
+Create the key in GenAI Studio under your avatar → **Settings → Account → API Keys**. LightHouse stores it encrypted with Windows' own data protection, in its admin-only data folder, so a copy taken to another computer is useless. It's only ever sent to `genai.rcac.purdue.edu`, over HTTPS, and is never shown, logged or put in the dashboard. To check whether it's set, use `cloud_key status`. To turn it off, use `cloud_key clear`, then restart the service. If you think the key leaked, delete it in GenAI Studio and create a new one. GenAI Studio is for Purdue students, faculty and staff, and the key is tied to your account, so never put it in an installer or share it.
+
 ### Roles
 
 - **Owner:** plain-English alerts, trends and personal preferences.
@@ -132,6 +152,16 @@ Roles are enforced by the server. Hiding a tab in the dashboard is presentation,
 ---
 
 ## Running setup again, upgrading and uninstalling
+
+**Pausing monitoring** (e.g. taking the laptop home): on **Home**, an admin can click **Pause monitoring**. This stops network capture (Suricata) and alert triage, unloads the AI, and keeps them off even after a restart. **Resume monitoring** turns them back on. While paused, Home says so for every user. The small dashboard service keeps running so the button can turn monitoring back on. Sysmon keeps writing to the Windows event log; LightHouse reads those entries once resumed.
+
+**Updates:** each time an admin opens the dashboard, LightHouse checks GitHub for a newer release (at most every 15 minutes). If there is one, choose **Update now**:
+- LightHouse downloads the new installer from that release.
+- It checks the download against the release's SHA-256 checksum file and refuses anything that doesn't match.
+- It installs the update in the background. The dashboard closes for a few minutes and reloads by itself.
+- Your alerts, accounts and settings are kept.
+
+If the release has no checksum file, or the automatic update fails, the pop-up offers **Open release page** instead; download the installer there and run it. The check is a plain request to GitHub's public releases page and sends nothing about your computer or alerts. Offline, it simply finds nothing.
 
 **Running `LightHouse-Setup.exe` again** repairs or upgrades the install in place; it never makes a second copy. Your alerts, accounts, passwords and settings are kept, and the AI model is reused rather than downloaded again. If setup stopped partway, fix the cause it reports and run it again.
 
@@ -197,6 +227,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\dev-update
 ```
 
 It rebuilds the dashboard, copies LightHouse's own code into the installed copy and restarts the services, in seconds. It doesn't touch Python dependencies, Suricata, Sysmon, the AI model or settings. After changing `pyproject.toml`, `uv.lock` or `install.ps1`, run the full installer instead. It's for development only and never part of a release.
+
+**Publishing a release** (so the dashboard's update prompt finds it):
+1. Bump `version` in `pyproject.toml` and `AppVersion` in `packaging/windows/lighthouse.iss`, for example to `0.2.0`.
+2. Build the installer. The build writes `dist\LightHouse-Setup.exe` and its checksum file `dist\LightHouse-Setup.exe.sha256`.
+3. Publish a GitHub release tagged `v0.2.0` with **both files** attached.
+
+Installs older than the tag will then offer the update. Without the `.sha256` file, the dashboard can only link to the release page.
+
+Anyone who can publish releases on this GitHub repository can install code on every LightHouse computer, so protect the account with two-factor sign-in.
 
 For dashboard work with hot reload:
 

@@ -215,14 +215,20 @@ def load_llama(settings: LlamaCppSettings):
     # use_mmap is llama.cpp's default, spelled out because the design relies on it:
     # the ingestion and API services each load the model, and a memory-mapped file
     # is shared through the OS page cache instead of held twice.
+    options: dict[str, Any] = {"n_ctx": settings.context_size, "n_gpu_layers": settings.gpu_layers,
+                               "use_mmap": True, "verbose": False}
     threads = plan_threads(settings)
     if threads:
         # Prompt reading (batch) gets the same cores as writing: on a hybrid laptop
         # llama.cpp's default of every logical processor includes the slowest ones.
-        return Llama(model_path=str(path), n_ctx=settings.context_size, n_threads=threads,
-                     n_threads_batch=threads, n_gpu_layers=settings.gpu_layers, use_mmap=True, verbose=False)
-    return Llama(model_path=str(path), n_ctx=settings.context_size,
-                 n_gpu_layers=settings.gpu_layers, use_mmap=True, verbose=False)
+        options.update(n_threads=threads, n_threads_batch=threads)
+    try:
+        # Flash attention computes the same attention with less memory traffic, so
+        # answers are unchanged and long prompts are read faster.
+        return Llama(model_path=str(path), flash_attn=True, **options)
+    except (ValueError, RuntimeError, TypeError) as error:
+        logger.warning("Flash attention unavailable in this llama.cpp build (%s); loading without it", error)
+        return Llama(model_path=str(path), **options)
 
 
 def parse_reply(content: str) -> TriageResult:
@@ -398,6 +404,36 @@ class LlamaCppTriageModel(TriageModel):
                 # Shielded: if this task is being cancelled, the worker still runs
                 # to its next stop check, and the thread lock keeps the context safe.
                 await asyncio.shield(worker)
+
+    async def preload(self) -> bool:
+        """Load the model now rather than on the first alert or question. Waits its
+        turn like any other use of the model. Never raises."""
+        async with self._lock:
+            return await self._ensure_loaded()
+
+    async def warm(self, system: str, messages: list[dict[str, str]]) -> bool:
+        """Load the model if needed and read the prompt into the context, keeping its
+        state (prefix reuse plus the RAM cache), so the question that follows reads
+        only itself. Skipped, not queued, while the model is busy: a warm-up must
+        never delay a real answer."""
+        if self._lock.locked():
+            return False
+        async with self._lock:
+            if not await self._ensure_loaded():
+                return False
+            try:
+                await asyncio.to_thread(self._warm_blocking, system, messages)
+                return True
+            except Exception as error:
+                logger.warning("Local AI warm-up failed: %s", error)
+                return False
+
+    def _warm_blocking(self, system: str, messages: list[dict[str, str]]) -> None:
+        with self._thread_lock:
+            self._enable_prompt_cache()
+            # One token is the least llama.cpp generates; the point is the reading.
+            self._llama.create_chat_completion(messages=[{"role": "system", "content": system}, *messages],
+                                               temperature=0.0, max_tokens=1)
 
     def _enable_prompt_cache(self) -> None:
         """Keep recent prompt states so a chat need not re-read what it already read.

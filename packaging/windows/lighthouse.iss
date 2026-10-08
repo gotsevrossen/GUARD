@@ -1,4 +1,4 @@
-﻿#define AppVersion "0.1.0"
+﻿#define AppVersion "0.3.1"
 #ifndef PayloadDir
   #error Build with packaging/windows/build.ps1 to supply the bundled Python runtime and dashboard.
 #endif
@@ -37,6 +37,13 @@ FinishedHeadingLabel=LightHouse is ready
 FinishedLabel=LightHouse is monitoring in the background and starts with Windows.%n%nOpen the dashboard any time from the Start menu or the desktop shortcut, or go to http://127.0.0.1:8000 in your browser.%n%nSign in as admin. Your one-time password is in first-run-password.txt in the data folder inside the LightHouse install folder. Read it from PowerShell run as administrator ("First sign-in" in the README has the command). It is deleted once you choose your own password.
 [Tasks]
 Name: "desktopicon"; Description: "Put a LightHouse Dashboard shortcut on the desktop"
+[InstallDelete]
+; The payload folders are replaced, not merged: whatever an older build left there
+; would otherwise linger. A leftover lighthouse_security_copilot-<old>.dist-info made
+; an updated install still report the old version and offer the update forever.
+; Services are stopped by then (PrepareToInstall). Never data or Suricata.
+Type: filesandordirs; Name: "{app}\runtime"
+Type: filesandordirs; Name: "{app}\dashboard"
 [Files]
 Source: "art\lighthouse.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion

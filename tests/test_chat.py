@@ -690,3 +690,60 @@ def test_prompt_cache_is_switched_on_once_for_chat(tmp_path):
 
 def test_runtime_without_a_prompt_cache_still_chats(tmp_path):
     assert collect(llama_model(StreamingLlama(["still", " fine"]), tmp_path)) == ["still", " fine"]
+
+
+# --- warming up while the owner types ----------------------------------------------
+
+from triage.llm import CHAT_SYSTEM_PROMPT, warm_chat
+
+
+class WarmFake(FakeChatModel):
+    def __init__(self):
+        super().__init__()
+        self.warmed = []
+
+    async def warm(self, system, messages):
+        self.warmed.append({"system": system, "messages": messages})
+        return True
+
+
+def test_warm_reads_exactly_the_opening_the_next_question_starts_with(api, client, monkeypatch):
+    fake = WarmFake()
+    monkeypatch.setattr(api, "_chat_model", fake)
+    token = owner_token(api, client)
+    alert_id = seed(api, tier=GuidanceTier.GET_HELP)
+    response = client.post("/api/chat/warm", headers=auth(token), json={"alert_id": alert_id})
+    assert response.status_code == 200 and response.json() == {"warmed": True}
+    warmed = fake.warmed[-1]
+    assert warmed["system"] == CHAT_SYSTEM_PROMPT
+    ask(client, token, alert_id=alert_id)
+    asked = fake.calls[-1]["messages"]
+    # The question's prompt begins with the warmed turns, so only the question is new.
+    assert asked[:len(warmed["messages"])] == warmed["messages"]
+    text = "\n".join(message["content"] for message in warmed["messages"])
+    for marker in (RAW_MARKER, REASONING_MARKER, UNCERTAINTY_MARKER):
+        assert marker not in text
+
+
+def test_warm_checks_happen_first(api, client, model):
+    assert client.post("/api/chat/warm", json={"alert_id": None}).status_code in (401, 403)
+    token = owner_token(api, client)
+    assert client.post("/api/chat/warm", headers=auth(token), json={"alert_id": 999}).status_code == 404
+    # A runtime that cannot warm simply says so.
+    assert client.post("/api/chat/warm", headers=auth(token), json={}).json() == {"warmed": False}
+
+
+def test_llama_warm_reads_the_prompt_and_is_skipped_while_busy(tmp_path):
+    llama = CachingLlama(["x"])
+    model = llama_model(llama, tmp_path)
+    opening = [{"role": "user", "content": "CONTEXT"}, {"role": "assistant", "content": "ack"}]
+    assert asyncio.run(model.warm("SYS", opening)) is True
+    call = llama.calls[-1]
+    assert call["max_tokens"] == 1 and call["messages"] == [{"role": "system", "content": "SYS"}, *opening]
+    assert len(llama.caches) == 1
+
+    async def while_busy():
+        async with model._lock:
+            return await model.warm("SYS", opening)
+    assert asyncio.run(while_busy()) is False
+    assert asyncio.run(warm_chat(None, [], False)) is False
