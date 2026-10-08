@@ -30,7 +30,7 @@ runs a local AI self-test. It enables Security logon success/failure auditing.
 **The free Npcap edition cannot install silently.** This is a missing feature,
 not a switch that LightHouse can enable. See the [Npcap vendor guide](https://npcap.com/guide/npcap-users-guide.html).
 For a completely unattended install, preinstall Npcap or supply an OEM installer
-path in `C:\ProgramData\LightHouse\config\windows.json` under
+path in `<install folder>\data\config\windows.json` under
 `NpcapOemInstaller`. Then run, from an elevated terminal:
 
 ```powershell
@@ -43,21 +43,49 @@ The application payload may already be installed, but that is not a running stac
 
 ## Files, credentials, and services
 
-- Application and dashboard: `C:\Program Files\LightHouse`.
-- Database: `C:\ProgramData\LightHouse\lighthouse.db`.
-- Operator configuration: `C:\ProgramData\LightHouse\config\windows.json`.
-- Sysmon rules: `C:\ProgramData\LightHouse\config\sysmon.xml`.
-- Suricata configuration/rules/EVE: `config\suricata.yaml`, `rules`, and `suricata\eve.json` below the data directory.
-- Event Log checkpoints: `C:\ProgramData\LightHouse\state`.
-- AI model (GGUF): `C:\ProgramData\LightHouse\models\microsoft_Phi-4-mini-instruct-Q4_K_M.gguf`.
-- Installer transcript: `C:\ProgramData\LightHouse\logs\install.log`.
-- Last setup result: `C:\Program Files\LightHouse\setup\last-result.txt`.
-- Initial `admin` password: `C:\ProgramData\LightHouse\first-run-password.txt`, written
+Everything large follows the install folder chosen in setup (default
+`C:\Program Files\LightHouse`), so LightHouse can live entirely on another internal
+NTFS drive. Below, `<app>` is that folder and `<data>` is `<app>\data`.
+
+- Application and dashboard: `<app>`. Locked by setup before any file is copied in:
+  SYSTEM and Administrators full control, Users read and execute only (every service
+  runs from here as LocalSystem). Setup refuses network, removable and FAT32/exFAT
+  drives, drive roots, and non-empty folders that are not a LightHouse install.
+- Suricata (new installs): `<app>\Suricata`.
+- Database: `<data>\lighthouse.db`.
+- Operator configuration: `<data>\config\windows.json`.
+- Sysmon rules: `<data>\config\sysmon.xml`.
+- Suricata configuration/rules/EVE: `config\suricata.yaml`, `rules`, and `suricata\eve.json` below `<data>`.
+- Event Log checkpoints: `<data>\state`.
+- AI model (GGUF): `<data>\models\microsoft_Phi-4-mini-instruct-Q4_K_M.gguf`.
+- Installer transcript: `<data>\logs\install.log`.
+- Last setup result: `<app>\setup\last-result.txt`.
+- Initial `admin` password: `<data>\first-run-password.txt`, written
   on the first start only (`LIGHTHOUSE_FIRST_RUN_DIR`) and deleted when the admin
   sets their own password. It is also printed once to `logs\LightHouse-API.stdout.log`,
   but NSSM renames that log on every service restart, so search `LightHouse-API*`.
+- Always on the Windows drive (Windows requires it, ~100 MB): the Npcap driver, the
+  Visual C++ runtime, the Sysmon service binary, the Windows event logs, the Start
+  menu entries and setup's temporary files.
 
-Read it from an elevated terminal: `Get-Content "$env:ProgramData\LightHouse\first-run-password.txt"`.
+**Upgrading from a release that used `C:\ProgramData\LightHouse`:** when `<data>` has
+no database yet, setup stops the services, verifies the old folder is owned and
+writable only by Administrators/SYSTEM (ordinary users can create folders in
+ProgramData, so an untrusted tree is refused, never reused), checks free space,
+moves it into `<data>` and removes the original. If the program itself moved, the
+services are re-pointed at the new folder and, once everything is running, the old
+program folder is deleted (only if it is a LightHouse folder). Suricata is moved
+next to the program only from LightHouse's own old default (`C:\Suricata`, or the
+system drive) and only when the drive changed; a folder chosen in `SuricataDir` is
+left alone.
+
+Read the password from an elevated terminal:
+
+```powershell
+$lh = Join-Path (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' | Where-Object DisplayName -like 'LightHouse*').InstallLocation 'data'
+Get-Content "$lh\first-run-password.txt"
+```
+
 Do not browse there in File Explorer and accept its "Continue" prompt, which
 permanently grants your account access to the protected folder. The generated
 password banner and mandatory first-login password change are unchanged. Data,
@@ -218,10 +246,10 @@ installers. Honor a dependency's reported reboot requirement.
 
 | Environment variable | Windows default |
 | --- | --- |
-| LIGHTHOUSE_SURICATA_PATH | `C:\Suricata\log\eve.json`; installer overrides to ProgramData |
+| LIGHTHOUSE_SURICATA_PATH | `<system drive>\Suricata\log\eve.json`; installer sets `<data>\suricata\eve.json` |
 | LIGHTHOUSE_SYSMON_CHANNEL | `Microsoft-Windows-Sysmon/Operational` |
 | LIGHTHOUSE_SECURITY_CHANNEL | `Security` |
-| LIGHTHOUSE_EVENT_STATE_DIR | `C:\ProgramData\LightHouse\state` |
+| LIGHTHOUSE_EVENT_STATE_DIR | `%ProgramData%\LightHouse\state`; installer sets `<data>\state` |
 | LIGHTHOUSE_MODEL_BACKEND | `llama_cpp` (`ollama` is the Linux default) |
 | LIGHTHOUSE_MODEL_PATH | unset; installer sets the GGUF path under `models` |
 | LIGHTHOUSE_MODEL_CONTEXT_SIZE | `4096` tokens |
@@ -273,7 +301,7 @@ VM with no Python, Visual C++ runtime, Ollama or other AI software installed:
 1. Run `LightHouse-Setup.exe`; setup completes and `last-result.txt` reads
    `Installation completed.` without an AVX2 warning (on an AVX2 CPU).
 2. The transcript shows the Visual C++ runtime installed and the self-test JSON
-   (`"ok": true`) for the GGUF under `C:\ProgramData\LightHouse\models`.
+   (`"ok": true`) for the GGUF under `<data>\models`.
 3. `C:\Program Files\LightHouse\runtime\Lib\site-packages\llama_cpp\lib`
    contains `llama.dll`, `ggml.dll`, `ggml-base.dll` and `ggml-cpu.dll`.
 4. The API, Ingestion and Suricata services are running; no LightHouse-Ollama

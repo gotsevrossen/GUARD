@@ -146,12 +146,26 @@ p{line-height:1.55}
 .thread .turn p+p{margin-top:10px}
 .thread .turn.them .mark{display:block;width:26px;height:26px;margin-bottom:12px;border-radius:50%;
   background:var(--green)}
-.typing{display:inline-flex;gap:5px;padding:6px 0}
-.typing i{width:6px;height:6px;border-radius:50%;background:var(--muted);opacity:.3;
-  animation:blink 1.1s ease-in-out infinite}
-.typing i:nth-child(2){animation-delay:.16s}
-.typing i:nth-child(3){animation-delay:.32s}
-@keyframes blink{0%,100%{opacity:.25}50%{opacity:.9}}
+/* "LightHouse is replying": a small green swell with drops splashing off the crest.
+   Brand tokens only. The swells slide exactly one wave period (60 user units) so
+   the loop is seamless; the svg clips the second period. */
+.wave{display:block;width:60px;height:24px;margin-top:6px}
+.wave svg{display:block;width:100%;height:100%;overflow:hidden}
+.wave .back path{fill:var(--green);opacity:.4}
+.wave .front path{fill:var(--green)}
+.wave .drops circle{fill:var(--green-dark);opacity:0}
+.wave .back{animation:swell 2.6s linear infinite}
+.wave .front{animation:swell 1.7s linear infinite}
+@keyframes swell{from{transform:translateX(0)}to{transform:translateX(-60px)}}
+.wave .drops circle{animation:splash 1.7s ease-out infinite}
+.wave .drops circle:nth-child(1){--drift:-5px}
+.wave .drops circle:nth-child(2){--drift:2px;animation-delay:.45s}
+.wave .drops circle:nth-child(3){--drift:6px;animation-delay:.9s}
+@keyframes splash{
+  0%{transform:translate(0,5px);opacity:0}
+  15%{opacity:1}
+  50%{transform:translate(var(--drift),-8px);opacity:1}
+  100%{transform:translate(calc(var(--drift) * 2),6px);opacity:0}}
 
 /* ---- Skeleton shown while a page's data has not arrived ---- */
 .sk{display:block;border-radius:8px;
@@ -238,7 +252,11 @@ main:not(.with-dock) .dock{display:none}
 /* content fades out as it passes behind the composer */
 .dock::before{content:"";position:absolute;left:0;right:0;bottom:100%;height:40px;
   background:linear-gradient(to bottom,transparent,var(--ground));pointer-events:none}
-.dock form{display:flex;align-items:flex-end;gap:10px;padding:10px;border-radius:var(--r-md);background:var(--paper)}
+/* the composer glows in the brand green, mixed from the token rather than a new colour */
+.dock form{display:flex;align-items:flex-end;gap:10px;padding:10px;border-radius:var(--r-md);background:var(--paper);
+  box-shadow:0 0 0 1px color-mix(in srgb,var(--green) 35%,transparent),0 6px 26px color-mix(in srgb,var(--green) 30%,transparent);
+  transition:box-shadow .2s ease}
+.dock form:focus-within{box-shadow:0 0 0 1.5px var(--green),0 8px 32px color-mix(in srgb,var(--green) 42%,transparent)}
 .dock textarea{flex:1;padding:12px;border:0;outline:0;resize:none;font:inherit;font-size:.95rem;
   background:transparent;field-sizing:content;max-height:28vh;overflow-y:auto}
 .dock form button{flex:0 0 auto;width:42px;height:42px;border:0;border-radius:var(--r-sm);
@@ -266,7 +284,7 @@ main:not(.with-dock) .dock{display:none}
 .login .error{margin:2px 0 0;font-size:.86rem;color:#ffe0da}
 
 @media (prefers-reduced-motion:reduce){
-  .sk,.typing i{animation:none}
+  .sk,.wave g,.wave circle{animation:none}
 }
 
 @media (max-width:720px){

@@ -95,6 +95,82 @@ function Restore-DataOwnership([string]$Path) {
     # by any administrator accepts it.
     Set-PrivateTree ([IO.Path]::GetFullPath($Path)) $false
 }
+function New-AppAcl([bool]$Directory) {
+    # The program tree: SYSTEM and Administrators change it, Users may only read and
+    # run it. Every LightHouse service runs from here as LocalSystem, so anyone who
+    # could replace a file here could run code as SYSTEM. Program Files gives this by
+    # default; any other folder (C:\LightHouse, another drive) must be made so.
+    $acl = if ($Directory) { New-Object Security.AccessControl.DirectorySecurity } else { New-Object Security.AccessControl.FileSecurity }
+    $acl.SetAccessRuleProtection($true, $false)
+    $acl.SetOwner([Security.Principal.SecurityIdentifier]'S-1-5-32-544')
+    $inheritance = if ($Directory) { 'ContainerInherit,ObjectInherit' } else { 'None' }
+    foreach ($grant in @(@('S-1-5-18', 'FullControl'), @('S-1-5-32-544', 'FullControl'), @('S-1-5-32-545', 'ReadAndExecute'))) {
+        $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
+            [Security.Principal.SecurityIdentifier]$grant[0], $grant[1], $inheritance, 'None', 'Allow')))
+    }
+    return $acl
+}
+function Get-InstallVolume([string]$Path) {
+    # Separate so tests can describe a drive without needing one.
+    $root = [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($Path))
+    if ($root.StartsWith('\\')) { return [pscustomobject]@{ Root = $root; DriveType = 'Network'; DriveFormat = '' } }
+    $drive = New-Object IO.DriveInfo $root
+    return [pscustomobject]@{ Root = $root; DriveType = [string]$drive.DriveType; DriveFormat = [string]$drive.DriveFormat }
+}
+function Assert-InstallVolume([string]$Path) {
+    # Permissions are the security boundary for both the program and its data, so
+    # the drive must support them (FAT32/exFAT do not), and it must be there when
+    # the services start at boot (a USB or network drive may not be, or may come
+    # back under another letter).
+    $volume = Get-InstallVolume $Path
+    if ($volume.DriveType -ne 'Fixed') { throw "LightHouse must be installed on an internal drive, not a $($volume.DriveType.ToLower()) drive ($($volume.Root)). Choose a folder on an internal NTFS drive." }
+    if ($volume.DriveFormat -notin @('NTFS', 'ReFS')) { throw "The drive $($volume.Root) uses $($volume.DriveFormat), which cannot protect LightHouse's files. Choose a folder on an NTFS drive." }
+    $full = [IO.Path]::GetFullPath($Path).TrimEnd('\')
+    if ($full.Length -le 2) { throw "Choose a folder for LightHouse, not the root of drive $($volume.Root)" }
+}
+function Protect-AppDirectory([string]$Path, [string[]]$Except = @()) {
+    # Lock the root, then make everything below it inherit from it, replacing any
+    # explicit grant (an older install, or a folder someone prepared in advance).
+    # Subfolders named in $Except (the private data folder) are left to their own
+    # stricter protection.
+    $full = [IO.Path]::GetFullPath($Path)
+    $ancestor = [IO.DirectoryInfo]$full
+    while ($null -ne $ancestor) {
+        if ($ancestor.Exists -and ($ancestor.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "Reparse point in program path: $($ancestor.FullName)" }
+        $ancestor = $ancestor.Parent
+    }
+    Set-Acl -LiteralPath $full -AclObject (New-AppAcl $true)
+    foreach ($child in @(Get-ChildItem -LiteralPath $full -Force)) {
+        if ($child.Name -in $Except) { continue }
+        if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Reparse points are not permitted: $($child.FullName)" }
+        & icacls.exe $child.FullName /reset /T /C /Q | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Could not reset permissions on $($child.FullName) (icacls $LASTEXITCODE)" }
+    }
+    Assert-TrustedItem (Get-Item -LiteralPath $full -Force)
+}
+function Get-TreeSize([string]$Path) {
+    $sum = (Get-ChildItem -LiteralPath $Path -Recurse -Force -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
+    if ($sum) { return [int64]$sum } else { return [int64]0 }
+}
+function Assert-FreeSpace([string]$Path, [int64]$Bytes) {
+    $root = [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($Path))
+    $free = (New-Object IO.DriveInfo $root).AvailableFreeSpace
+    if ($free -lt $Bytes) { throw ("Not enough free space on {0}: {1:N1} GB needed, {2:N1} GB free." -f $root, ($Bytes / 1GB), ($free / 1GB)) }
+}
+function Move-DataTree([string]$Source, [string]$Target) {
+    # Moves an earlier install's data (database, settings, the 2.5 GB model) into
+    # the new data folder; robocopy because Move-Item cannot move a folder across
+    # drives. The caller verifies the source is trusted first. Copied files take
+    # the target's private permissions; the caller re-protects the tree afterwards.
+    & robocopy.exe $Source $Target /E /MOVE /XJ /COPY:DAT /DCOPY:T /R:2 /W:2 /NFL /NDL /NJH /NJS /NP | Out-Null
+    # robocopy: 0-7 are success variants, 8 and above mean files were not moved.
+    # /MOVE deletes a source file only after copying it, so nothing is lost either way.
+    if ($LASTEXITCODE -ge 8) { throw "Could not move all LightHouse data from $Source to $Target (robocopy $LASTEXITCODE). What was not moved is still in $Source; run setup again." }
+    if (Test-Path -LiteralPath $Source) {
+        if (@(Get-ChildItem -LiteralPath $Source -Recurse -Force -File).Count) { throw "Some LightHouse data could not be moved out of $Source. Close anything using it and run setup again." }
+        Remove-Item -LiteralPath $Source -Recurse -Force
+    }
+}
 function Assert-FileHash([string]$Path, [string]$Expected, [string]$Actual) {
     if ($Expected -notmatch '^[0-9a-fA-F]{64}$') { throw "Missing trusted SHA256 for $Path" }
     if (!$Actual) { $Actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash }

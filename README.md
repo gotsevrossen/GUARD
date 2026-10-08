@@ -16,7 +16,7 @@ LightHouse is a Windows application. The older Linux build is no longer maintain
 | **Memory** | **8 GB of RAM.** The AI model needs about 3 GB on its own and Suricata about 1 GB, on top of Windows. With less, the services fail or stall. |
 | **Virtual machines** | Give the VM a fixed **8192 MB** and **turn Dynamic Memory off** (Hyper-V: *Settings → Memory*). With Dynamic Memory, the AI model can fail to load because it needs its memory all at once. |
 | **CPU** | x64 with **AVX2** for the local AI (most Intel CPUs from 2013 on, AMD Zen and later). Without AVX2, LightHouse still monitors and keeps every alert, marked for a person to review. |
-| **Disk** | Several GB free. The AI model alone is about 2.5 GB. |
+| **Disk** | Several GB free on the drive you install to: the program, its data, the 2.5 GB AI model and Suricata all go there. It must be an **internal NTFS drive** (not USB, network, FAT32 or exFAT). About 100 MB always goes on the Windows drive: the Npcap driver, the Visual C++ runtime, Sysmon and the Windows event logs. |
 | **Internet** | **During setup only**, to download Suricata, Sysmon, Npcap, the detection rules, the Visual C++ runtime and the AI model. LightHouse does not need the internet afterwards. |
 | **Rights** | An administrator account to install. |
 
@@ -30,9 +30,10 @@ LightHouse is a Windows application. The older Linux build is no longer maintain
    (Get-FileHash .\LightHouse-Setup.exe -Algorithm SHA256).Hash
    ```
 3. Double-click it and approve the Windows administrator prompt.
-4. **Npcap** (the packet-capture driver) opens its own setup wizard. Tick **WinPcap API-compatible mode** and finish it. This is the only screen you need to answer.
-5. Wait. Setup installs the sensors and downloads the AI model, which can take a while on a slow connection.
-6. On the last page, leave **Open the LightHouse dashboard** ticked and click **Finish**.
+4. **Choose where to install.** The default is `C:\Program Files\LightHouse`. To keep LightHouse off `C:`, pick a new, empty folder on another internal drive, for example `D:\LightHouse`; everything large goes there. If LightHouse was installed before, setup moves its data (alerts, accounts and the AI model) to the new folder and removes the old copies.
+5. **Npcap** (the packet-capture driver) opens its own setup wizard. Tick **WinPcap API-compatible mode** and finish it. This is the only screen you need to answer.
+6. Wait. Setup installs the sensors and downloads the AI model, which can take a while on a slow connection.
+7. On the last page, leave **Open the LightHouse dashboard** ticked and click **Finish**.
 
 LightHouse runs in the background and starts with Windows, so there is nothing to launch. To open the dashboard again, use the **LightHouse Dashboard** shortcut on the desktop or in the Start menu, or go to `http://127.0.0.1:8000` in your browser.
 
@@ -41,18 +42,21 @@ LightHouse runs in the background and starts with Windows, so there is nothing t
 LightHouse creates an `admin` account with a random one-time password. There is no default password. To read it, open **PowerShell as administrator** and run:
 
 ```powershell
-Get-Content "$env:ProgramData\LightHouse\first-run-password.txt"
+$lh = Join-Path (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' | Where-Object DisplayName -like 'LightHouse*').InstallLocation 'data'
+Get-Content "$lh\first-run-password.txt"
 ```
+
+The first line finds LightHouse's data folder wherever you installed it; the commands below reuse `$lh`.
 
 Sign in as `admin` with that password. LightHouse then makes you choose your own (at least 12 characters) before anything else opens, and deletes the file.
 
-Installed with an earlier version? The file won't exist; the password is in the dashboard's logs instead:
+First installed with an earlier version? The file won't exist; the password is in the dashboard's logs instead:
 
 ```powershell
-Select-String -Path "$env:ProgramData\LightHouse\logs\LightHouse-API*" -Pattern 'password:'
+Select-String -Path "$lh\logs\LightHouse-API*" -Pattern 'password:'
 ```
 
-Don't open the `ProgramData\LightHouse` folder in File Explorer and click **Continue** when it asks for permission. That permanently gives your Windows account access to LightHouse's protected data folder.
+Don't open the `data` folder in File Explorer and click **Continue** when it asks for permission. That permanently gives your Windows account access to LightHouse's protected data.
 
 For a fully unattended install (no Npcap wizard), see [docs/windows-install.md](docs/windows-install.md).
 
@@ -109,7 +113,7 @@ The chat box at the bottom of Home answers questions using the same on-device AI
 - **Ask about one alert:** open the alert and click **Ask LightHouse about this**. The chat is then linked to that alert, follow-up questions included.
 - **Ask in general:** type in the box, or pick one of the common questions. LightHouse uses your most recent open alerts as context.
 - **Chat names:** each new chat gets a short name, such as "Sysmon activity question", written by the AI once it has answered. Chats are kept only in this browser.
-- **Speed:** the AI runs on your computer's processor, so an answer can take a minute or more. You can keep using the dashboard while you wait.
+- **Speed:** the AI runs on your computer's processor, so the first words can take a minute or more while the green wave animation plays. The answer then appears as it's written. You can keep using the dashboard meanwhile.
 - **The AI can't overrule the warnings.** For a "get help now" or "second opinion" alert, LightHouse adds a fixed reminder above the AI's answer, so nothing written into an alert can talk you out of getting help.
 - **Without AVX2, or if the AI isn't working,** the chat says so plainly. Monitoring carries on as normal.
 
@@ -129,7 +133,7 @@ Roles are enforced by the server. Hiding a tab in the dashboard is presentation,
 
 **Running `LightHouse-Setup.exe` again** repairs or upgrades the install in place; it never makes a second copy. Your alerts, accounts, passwords and settings are kept, and the AI model is reused rather than downloaded again. If setup stopped partway, fix the cause it reports and run it again.
 
-**Uninstalling** (Windows *Settings → Apps*) removes the LightHouse services and program files. It keeps your data in `C:\ProgramData\LightHouse` (alerts, accounts and the AI model). It also leaves Npcap, Suricata, Sysmon and the Visual C++ runtime installed, since other software may use them. Remove those separately if you want them gone.
+**Uninstalling** (Windows *Settings → Apps*) removes the LightHouse services and program files. It keeps your data in the `data` folder inside the install folder (alerts, accounts and the AI model), and Suricata in the `Suricata` folder next to it. It also leaves Npcap, Suricata, Sysmon and the Visual C++ runtime installed, since other software may use them. Remove those separately if you want them gone.
 
 ---
 
@@ -138,8 +142,8 @@ Roles are enforced by the server. Hiding a tab in the dashboard is presentation,
 If setup ends with **"LightHouse setup is incomplete"**, the message includes the reason. For the full picture, open **PowerShell as administrator** and paste:
 
 ```powershell
-$d = "$env:ProgramData\LightHouse"
 $app = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' | Where-Object DisplayName -like 'LightHouse*').InstallLocation
+$d = Join-Path $app 'data'
 "--- setup result";     Get-Content "$app\setup\last-result.txt"
 "--- install.log";      Get-Content "$d\logs\install.log" -Tail 30
 "--- services";         Get-Service LightHouse-* | Format-Table Name, Status -AutoSize
@@ -155,12 +159,15 @@ $app = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninst
 | --- | --- |
 | `The remote name could not be resolved: '...'` | No internet or DNS during setup. Check with `Test-NetConnection aka.ms -Port 443`. On a VM, give it a network switch with internet access (Hyper-V: *Default Switch*), wait a minute after it boots, then rerun setup. |
 | `LightHouse-Ingestion is not running` | Check `ingestion errors` above. If memory shows under 8 GB, or it changes between runs (Dynamic Memory), fix the memory first. |
+| `must be installed on an internal drive`, `cannot protect LightHouse's files`, `already contains other files` | The chosen folder isn't safe for a program that runs as SYSTEM. Pick a new or empty folder on an internal NTFS drive. |
+| `Untrusted owner` / `Untrusted write permission` while moving data | The old `ProgramData\LightHouse` folder has permissions LightHouse didn't set, so setup won't reuse it. Rename that folder (for example to `LightHouse.old`) and run setup again; it then starts fresh. |
+| `Not enough free space on ...` | Moving the old data (mostly the 2.5 GB model) needs that much room on the new drive. Free some space, or pick another drive. |
 | `Free Npcap cannot install silently` | A silent install was attempted without Npcap. Install Npcap first, or run setup normally to get its wizard. |
 | `Cannot read required Event Log channels` | Setup must run as administrator, and Sysmon must be installed (setup does this). |
 | `Visual C++ runtime ... restart Windows` | Restart Windows, then rerun setup. |
 | `The local AI model failed its self-test` | Usually not enough memory, or a damaged model download. Fix the memory, then rerun setup (a damaged download is fetched again). |
 
-Some Emerging Threats rules use features the Windows build of Suricata lacks. Setup switches off exactly those rules, lists them in `C:\ProgramData\LightHouse\rules\disabled-by-lighthouse.txt`, and keeps the rest. A handful there is normal.
+Some Emerging Threats rules use features the Windows build of Suricata lacks. Setup switches off exactly those rules, lists them in `data\rules\disabled-by-lighthouse.txt` inside the install folder, and keeps the rest. A handful there is normal.
 
 More detail, including every file location and setting, is in [docs/windows-install.md](docs/windows-install.md).
 
@@ -198,7 +205,7 @@ Use `npm ci`, not `npm install`: it installs exactly the reviewed `dashboard/pac
 - **LightHouse-Ingestion:** tails Suricata's `eve.json` and the Sysmon and Security event logs, deduplicates alerts, runs the local AI, applies the severity floor and confidence checks, and stores the result in SQLite.
 - **LightHouse-Suricata:** packet capture on the network adapter chosen at install.
 
-Sensor data is treated as attacker-controlled. Only a short, length-capped extract of each alert reaches the AI, fenced off as untrusted evidence, and the AI's answer is validated before it is stored. Settings live in `C:\ProgramData\LightHouse\config\windows.json`; see [docs/windows-install.md](docs/windows-install.md).
+Sensor data is treated as attacker-controlled. Only a short, length-capped extract of each alert reaches the AI, fenced off as untrusted evidence, and the AI's answer is validated before it is stored. Settings live in `data\config\windows.json` inside the install folder; see [docs/windows-install.md](docs/windows-install.md).
 
 ### Known gaps
 

@@ -295,9 +295,25 @@ function Home({ alerts, canSeeEvidence, act, ask, evidence }: PageProps) {
   );
 }
 
+/* LightHouse's "working" mark: two swells rolling past at different speeds, with
+   drops splashing up off the crest. Brand greens only; static under reduced motion.
+   Each wave path spans two periods so sliding it one period loops seamlessly. */
+const Wave = () => (
+  <span className="wave" role="status" aria-label="LightHouse is replying">
+    <svg viewBox="0 0 60 24" aria-hidden="true" focusable="false">
+      <g className="drops"><circle cx="20" cy="13" r="1.7" /><circle cx="31" cy="12" r="1.3" /><circle cx="41" cy="13" r="1.5" /></g>
+      <g className="swell back"><path d="M0 15 Q15 10 30 15 T60 15 T90 15 T120 15 V24 H0 Z" /></g>
+      <g className="swell front"><path d="M0 17 Q15 21 30 17 T60 17 T90 17 T120 17 V24 H0 Z" /></g>
+    </svg>
+  </span>
+);
+
+const paragraphs = (text: string) => text.split(/\n+/).map((line, index) => <p key={index}>{line}</p>);
+
 /* An open conversation. Nothing labels the speaker: a question sits in its own
-   card on the right, the answer runs as plain text on the left. */
-function Thread({ chat, thinking }: { chat: Conversation; thinking: boolean }) {
+   card on the right, the answer runs as plain text on the left. While the model
+   writes, its words appear as they arrive, with the wave beneath them. */
+function Thread({ chat, thinking, streamed }: { chat: Conversation; thinking: boolean; streamed: string }) {
   return (
     <div>
       <p className="eyebrow">Chat</p>
@@ -306,10 +322,10 @@ function Thread({ chat, thinking }: { chat: Conversation; thinking: boolean }) {
         {chat.turns.map((turn, index) => (
           <div className={`turn ${turn.role}`} key={index}>
             {turn.role === 'them' && <span className="mark" aria-hidden="true" />}
-            {turn.text.split(/\n+/).map((line, line_index) => <p key={line_index}>{line}</p>)}
+            {paragraphs(turn.text)}
           </div>
         ))}
-        {thinking && <div className="turn them"><span className="mark" aria-hidden="true" /><span className="typing" role="status" aria-label="LightHouse is replying"><i /><i /><i /></span></div>}
+        {thinking && <div className="turn them"><span className="mark" aria-hidden="true" />{streamed.trim() && paragraphs(streamed.trimStart())}<Wave /></div>}
       </div>
     </div>
   );
@@ -631,6 +647,9 @@ function App() {
   const [pendingId, setPendingId] = useState<string | null>(null);
   const pending = useRef<string | null>(null);
   const thinking = pendingId !== null;
+  /* The answer so far, while it streams in. Kept out of the stored conversations
+     until it is complete, so localStorage is written once per answer, not per word. */
+  const [streamed, setStreamed] = useState('');
   const [message, setMessage] = useState('');
 
   const load = () => api.alerts().then(setAlerts).catch(() => setAlerts([]));
@@ -673,22 +692,31 @@ function App() {
     });
     pending.current = chat.id;
     setPendingId(chat.id);
+    setStreamed('');
     void (async () => {
       let answered = false;
+      let received = '';
       try {
-        let reply: Turn;
+        let replies: Turn[];
         try {
-          const result = await api.chat(messages, alertId);
-          answered = result.available;
+          const result = await api.chatStream(messages, alertId, piece => { received += piece; setStreamed(received); });
+          answered = result.available && received.trim() !== '';
+          const text = received.trim();
           /* the AI-unavailable notice is fixed server text, not the model's words */
-          reply = result.available ? { role: 'them', text: result.reply } : { role: 'them', text: result.reply, local: true };
+          replies = !text ? [{ role: 'them', text: chatFailure(null, false), local: true }]
+            : [result.available ? { role: 'them', text } : { role: 'them', text, local: true }];
         } catch (failure) {
-          reply = { role: 'them', text: chatFailure(failure, alertId !== null), local: true };
+          /* A stream cut off midway keeps what the model already wrote. */
+          const partial = received.trim();
+          replies = partial
+            ? [{ role: 'them', text: partial }, { role: 'them', text: 'LightHouse stopped before finishing this answer. Try asking again.', local: true }]
+            : [{ role: 'them', text: chatFailure(failure, alertId !== null), local: true }];
         }
-        update(current => current.map(entry => entry.id === chat.id ? { ...entry, turns: [...entry.turns, reply], updated: Date.now() } : entry));
+        update(current => current.map(entry => entry.id === chat.id ? { ...entry, turns: [...entry.turns, ...replies], updated: Date.now() } : entry));
       } finally {
         pending.current = null;
         setPendingId(null);
+        setStreamed('');
       }
       /* Named after the answer, not alongside it, so the title never queues ahead of
          the reply on the one local model. A thread opened from an alert keeps the
@@ -715,7 +743,7 @@ function App() {
 
   const page = () => {
     if (!alerts) return <Skeleton />;
-    if (tab === 'home') return chat ? <Thread chat={chat} thinking={pendingId === chat.id} /> : <Home {...pageProps} />;
+    if (tab === 'home') return chat ? <Thread chat={chat} thinking={pendingId === chat.id} streamed={pendingId === chat.id ? streamed : ''} /> : <Home {...pageProps} />;
     if (tab === 'alerts') return <Alerts {...pageProps} />;
     if (tab === 'trends') return <Trends alerts={alerts} />;
     if (tab === 'advanced') return <Advanced selected={selected} />;

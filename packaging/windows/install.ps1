@@ -1,5 +1,12 @@
 param([Parameter(Mandatory=$true)][string]$AppDir, [switch]$Unattended,
-      [string]$DataDir = "$env:ProgramData\LightHouse")
+      # Data lives next to the program, on the drive the owner chose.
+      [string]$DataDir = '',
+      # Where an earlier version was installed, if somewhere else; removed on success.
+      [string]$PreviousAppDir = '')
+if (!$DataDir) { $DataDir = Join-Path $AppDir 'data' }
+# Releases before data moved next to the program kept it here.
+$LegacyDataDir = "$env:ProgramData\LightHouse"
+$LighthouseServices = @('LightHouse-Ingestion', 'LightHouse-API', 'LightHouse-Suricata')
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -11,6 +18,24 @@ try {
     $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
     if (!$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run the LightHouse installer as administrator.' }
     . "$PSScriptRoot\security.ps1"
+    Assert-InstallVolume $AppDir
+    # Nothing may hold the program or data files while they are locked down or moved.
+    foreach ($name in $LighthouseServices) {
+        $service = Get-Service $name -ErrorAction SilentlyContinue
+        if ($service -and $service.Status -ne 'Stopped') { Stop-Service $name -Force; $service.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(60)) }
+    }
+    Protect-AppDirectory $AppDir -Except @((Split-Path $DataDir -Leaf))
+    $dataFull = [IO.Path]::GetFullPath($DataDir).TrimEnd('\')
+    if ((Test-Path -LiteralPath $LegacyDataDir) -and ($dataFull -ne [IO.Path]::GetFullPath($LegacyDataDir).TrimEnd('\')) -and
+        !(Test-Path -LiteralPath "$DataDir\lighthouse.db") -and @(Get-ChildItem -LiteralPath $LegacyDataDir -Force).Count) {
+        # An earlier release's data: verified as trusted (ordinary users can create
+        # folders in ProgramData) before anything in it is reused, then moved.
+        Set-PrivateTree ([IO.Path]::GetFullPath($LegacyDataDir)) $true
+        Protect-DataDirectory $DataDir
+        Assert-FreeSpace $DataDir ((Get-TreeSize $LegacyDataDir) + 512MB)
+        Write-Host "Moving existing LightHouse data from $LegacyDataDir to $DataDir"
+        Move-DataTree $LegacyDataDir $DataDir
+    }
     Protect-DataDirectory $DataDir
     $dependencyHashes = Get-Content "$PSScriptRoot\dependency-hashes.json" -Raw | ConvertFrom-Json
     New-Item -ItemType Directory -Force "$DataDir\logs", "$DataDir\cache", "$DataDir\config", "$DataDir\state", "$DataDir\models", "$DataDir\rules", "$DataDir\suricata", "$AppDir\tools" | Out-Null
@@ -95,6 +120,16 @@ function Nssm([string[]]$Arguments) {
 }
 function Register([string]$Name, [string]$Exe, [string]$Arguments, [string[]]$Environment) {
     if (!(Get-Service $Name -ErrorAction SilentlyContinue)) { Nssm @('install', $Name, $Exe) }
+    else {
+        # A service registered by an install in another folder still starts that
+        # folder's nssm.exe; point it at this one before the old folder is removed.
+        $wrapper = "$AppDir\tools\nssm.exe"
+        $current = (Get-CimInstance Win32_Service -Filter "Name='$Name'").PathName
+        if ($current.Trim('"') -ne $wrapper) {
+            & sc.exe config $Name binPath= "`"$wrapper`"" | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "Could not move service $Name to $wrapper (sc.exe $LASTEXITCODE)" }
+        }
+    }
     Nssm @('set', $Name, 'Application', $Exe)
     Nssm @('set', $Name, 'AppParameters', $Arguments)
     Nssm @('set', $Name, 'AppDirectory', $AppDir)
@@ -126,12 +161,22 @@ try {
             Where-Object { $_.AddressState -eq 'Preferred' } | Select-Object -First 1
         [ordered]@{HomeNet="$($address.IPAddress)/$($address.PrefixLength)";
             CaptureInterface="\Device\NPF_$(([guid]$adapter.InterfaceGuid).ToString('B'))";
-            SuricataDir="$env:SystemDrive\Suricata"; ApiPort=8000; ModelPath='';
+            SuricataDir=(Join-Path $AppDir 'Suricata'); ApiPort=8000; ModelPath='';
             NpcapOemInstaller=''} | ConvertTo-Json | Set-Content $configPath -Encoding utf8
     }
     # Model and OllamaPort in configurations from earlier releases are ignored.
     $config = Get-Content $configPath -Raw | ConvertFrom-Json
     if ([int]$config.ApiPort -lt 1024 -or [int]$config.ApiPort -gt 65535) { throw 'ApiPort must be in 1024..65535.' }
+    # Earlier releases put Suricata at the root of the Windows drive. If LightHouse
+    # now lives on another drive, Suricata moves next to it. Only LightHouse's own old
+    # default is moved; a folder the operator chose is left where it is.
+    $relocateSuricata = ($config.SuricataDir -in @('C:\Suricata', "$env:SystemDrive\Suricata")) -and
+        ([IO.Path]::GetPathRoot($config.SuricataDir) -ne [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($AppDir)))
+    $oldSuricataDir = $config.SuricataDir
+    if ($relocateSuricata) {
+        $config.SuricataDir = Join-Path $AppDir 'Suricata'
+        $config | ConvertTo-Json | Set-Content $configPath -Encoding utf8
+    }
     if (!(Get-Service npcap -ErrorAction SilentlyContinue)) {
         if ($config.NpcapOemInstaller) {
             $oem = "$DataDir\cache\npcap-oem.exe"
@@ -149,7 +194,20 @@ try {
         if (!(Get-Service npcap -ErrorAction SilentlyContinue)) { throw 'Npcap driver was not installed.' }
     }
     $suricataMsi = Fetch 'https://www.openinfosecfoundation.org/download/windows/Suricata-8.0.7-1-64bit.msi' 'Suricata-8.0.7-1-64bit.msi'
-    $repair = if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{42AB4288-8940-4B7D-97E2-75901A1D188F}') { 'REINSTALL=ALL REINSTALLMODE=vomus' } else { '' }
+    $suricataProduct = '{42AB4288-8940-4B7D-97E2-75901A1D188F}'
+    $suricataInstalled = Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$suricataProduct"
+    if ($relocateSuricata -and $suricataInstalled) {
+        # An MSI repair cannot change its install folder, so the old copy is removed
+        # and Suricata is installed fresh in the new one. Its rules, configuration and
+        # logs live in the data folder, so nothing of LightHouse's is lost.
+        Write-Host "Moving Suricata from $oldSuricataDir to $($config.SuricataDir)"
+        Run 'msiexec.exe' "/x $suricataProduct /qn /norestart /L*v `"$DataDir\logs\suricata-msi-remove.log`""
+        if ((Test-Path -LiteralPath $oldSuricataDir) -and !@(Get-ChildItem -LiteralPath $oldSuricataDir -Recurse -Force -File).Count) {
+            Remove-Item -LiteralPath $oldSuricataDir -Recurse -Force
+        }
+        $suricataInstalled = $false
+    }
+    $repair = if ($suricataInstalled) { 'REINSTALL=ALL REINSTALLMODE=vomus' } else { '' }
     Run 'msiexec.exe' "/i `"$suricataMsi`" /qn /norestart $repair INSTALLDIR=`"$($config.SuricataDir)`" /L*v `"$DataDir\logs\suricata-msi.log`""
     $suricataExe = Get-ChildItem $config.SuricataDir -Filter suricata.exe -Recurse | Select-Object -First 1
     if (!$suricataExe) { throw "Suricata not found in $($config.SuricataDir)" }
@@ -268,6 +326,16 @@ try {
     Write-Host "Initial admin password (first install, until you change it): $DataDir\first-run-password.txt"
     Write-Host "Configuration: $configPath. Review HOME_NET and capture adapter for this network."
     Write-Host "Local AI model: $modelPath"
+    if ($PreviousAppDir) {
+        # The program moved to a new folder. Remove the old copy, but only once this
+        # one is running, and only if it really is a LightHouse program folder.
+        $previous = [IO.Path]::GetFullPath($PreviousAppDir).TrimEnd('\')
+        if ($previous -ne [IO.Path]::GetFullPath($AppDir).TrimEnd('\') -and $previous.Length -gt 3 -and
+            (Test-Path -LiteralPath "$previous\setup\install.ps1") -and (Test-Path -LiteralPath "$previous\runtime\python.exe")) {
+            try { Remove-Item -LiteralPath $previous -Recurse -Force; Write-Host "Removed the previous program folder $previous" }
+            catch { Write-Host "Could not fully remove the previous program folder $previous ($_); delete it by hand." }
+        }
+    }
     Complete "Installation completed.$aiNote" 0
 } catch {
     Write-Host "INSTALLATION FAILED: $_"

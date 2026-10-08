@@ -80,8 +80,9 @@ python -m triage.local_model smoke-test --model-path <file.gguf>
 - **One process on desktop:** the FastAPI app serves `/api/*` and the built dashboard from the same origin on `127.0.0.1:8000`, and runs ingestion as a background asyncio task. The ingestion task must catch everything below `CancelledError` and log it; a bad sensor record must never take down login.
 - **Loopback only.** Never bind to `0.0.0.0`, add CORS origins, or expose the Vite dev server. LAN access exists only in the appliance deployment, behind TLS.
 - **`LIGHTHOUSE_DEV`** publishes the schema and route table. Workstation only; never set it in packaging.
-- Config is via `LIGHTHOUSE_*` env vars and `C:\ProgramData\LightHouse\config\windows.json`. Add new settings the same way and document them in `docs/windows-install.md`.
-- Windows paths live under `C:\Program Files\LightHouse` (app) and `C:\ProgramData\LightHouse` (DB, config, models, logs, state). Use `triage/paths.py`; never hard-code paths.
+- Config is via `LIGHTHOUSE_*` env vars and `<install folder>\data\config\windows.json`. Add new settings the same way and document them in `docs/windows-install.md`.
+- Windows paths follow the install folder chosen in setup (default `C:\Program Files\LightHouse`, may be on any internal NTFS drive): app in `<install folder>`, data (DB, config, models, logs, state) in `<install folder>\data`, Suricata in `<install folder>\Suricata`. The installer passes every path to the services as `LIGHTHOUSE_*` variables; never hard-code `C:\` or `ProgramData`. `C:\ProgramData\LightHouse` is only the legacy location setup migrates from. Only the Npcap driver, VC++ runtime, Sysmon binary and Windows event logs stay on the system drive.
+- The install folder is locked by setup (SYSTEM/Administrators full, Users read+execute) because every service runs from it as LocalSystem; keep it that way.
 
 ## Security rules (do not weaken)
 

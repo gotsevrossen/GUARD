@@ -31,7 +31,7 @@ from pathlib import Path
 import sys
 import threading
 import time
-from typing import Any, Callable
+from typing import Any, AsyncIterator, Callable
 
 from .llm import SYSTEM_PROMPT, TRIAGE_JSON_SCHEMA, TriageModel, build_prompt, unavailable_result
 from .schema import NormalizedAlert, Severity, Source, TriageResult
@@ -47,6 +47,16 @@ EXIT_UNSUPPORTED_CPU = 3
 
 class ModelUnavailable(RuntimeError):
     """The model cannot be loaded on this machine as configured."""
+
+
+class _StreamFailed:
+    """Carries a worker-thread exception across to the streaming coroutine."""
+    def __init__(self, error: Exception):
+        self.error = error
+
+
+# Sentinel the worker sends when generation has ended, normally or not.
+_STREAM_END = object()
 
 
 def _int_env(name: str, default: int, minimum: int) -> int:
@@ -238,6 +248,66 @@ class LlamaCppTriageModel(TriageModel):
                 # shows its fixed "unavailable" reply instead of an error.
                 logger.warning("Local AI chat failed: %s", error)
                 return None
+
+    async def chat_stream(self, system: str, messages: list[dict[str, str]], *,
+                          max_tokens: int, temperature: float) -> AsyncIterator[str]:
+        """chat(), streamed: llama.cpp generates in a worker thread and hands each
+        piece to the event loop as it is produced.
+
+        Closing this generator (the browser went away, or the caller hit its length
+        cap) sets a stop flag the worker checks between pieces, so an abandoned
+        question does not keep the one model context busy for hundreds of tokens.
+        The asyncio lock is held until the worker has let go of the context.
+        """
+        async with self._lock:
+            if not await self._ensure_loaded():
+                return
+            loop = asyncio.get_running_loop()
+            queue: asyncio.Queue[object] = asyncio.Queue()
+            stop = threading.Event()
+
+            def hand_over(item: object) -> None:
+                try:
+                    loop.call_soon_threadsafe(queue.put_nowait, item)
+                except RuntimeError:
+                    pass  # the loop is shutting down; nobody is waiting
+
+            def produce() -> None:
+                try:
+                    with self._thread_lock:
+                        stream = self._llama.create_chat_completion(
+                            messages=[{"role": "system", "content": system}, *messages],
+                            temperature=temperature,
+                            max_tokens=min(max_tokens, self.settings.max_tokens),
+                            stream=True,
+                        )
+                        for chunk in stream:
+                            if stop.is_set():
+                                break
+                            piece = chunk["choices"][0].get("delta", {}).get("content")
+                            if isinstance(piece, str) and piece:
+                                hand_over(piece)
+                except Exception as error:
+                    hand_over(_StreamFailed(error))
+                finally:
+                    hand_over(_STREAM_END)
+
+            worker = asyncio.ensure_future(asyncio.to_thread(produce))
+            try:
+                while True:
+                    item = await queue.get()
+                    if item is _STREAM_END:
+                        break
+                    if isinstance(item, _StreamFailed):
+                        # Includes a prompt too long for the context window.
+                        logger.warning("Local AI chat failed: %s", item.error)
+                        raise item.error
+                    yield item  # type: ignore[misc]
+            finally:
+                stop.set()
+                # Shielded: if this task is being cancelled, the worker still runs
+                # to its next stop check, and the thread lock keeps the context safe.
+                await asyncio.shield(worker)
 
     def _chat_blocking(self, system: str, messages: list[dict[str, str]], max_tokens: int,
                        temperature: float) -> str | None:

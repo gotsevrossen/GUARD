@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import sys
+from typing import Any, AsyncIterator
 
 import httpx
 
@@ -196,6 +197,19 @@ class TriageModel(ABC):
         """
         return None
 
+    async def chat_stream(self, system: str, messages: list[dict[str, str]], *,
+                          max_tokens: int, temperature: float) -> AsyncIterator[str]:
+        """The same reply as chat(), in pieces as it is generated. Yields nothing
+        when unavailable. May raise partway through (a runtime error mid-answer);
+        stream_chat turns that into a fixed note, never a broken response.
+
+        The default streams chat()'s whole reply as one piece, so a runtime that
+        cannot stream still works.
+        """
+        text = await self.chat(system, messages, max_tokens=max_tokens, temperature=temperature)
+        if text:
+            yield text
+
 
 def unavailable_result(reason: str) -> TriageResult:
     """Stored when no validated model output exists; asks for a human review."""
@@ -274,6 +288,7 @@ REVIEW_REMINDER = ("Reminder: LightHouse isn't sure about this alert — have so
                    "before you act.")
 OPEN_GET_HELP_NOTE = ("Reminder: at least one open alert could be serious. LightHouse recommends contacting your "
                       "IT provider or a security professional about it now; it is listed first on the Alerts page.")
+CHAT_STOPPED_NOTE = "(LightHouse stopped before finishing this answer. Try asking again.)"
 
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 _URL_PATTERN = re.compile(r"(://|\bwww\.|\b[a-z0-9-]+\.[a-z]{2,}\b)", re.IGNORECASE)
@@ -424,6 +439,60 @@ async def answer_chat(model: TriageModel | None, history: list[ChatMessage],
     elif any(needs_help(alert) for alert in alerts):
         reply = f"{reply}\n\n{OPEN_GET_HELP_NOTE}"
     return reply, True
+
+
+async def stream_chat(model: TriageModel | None, history: list[ChatMessage],
+                      alerts: list[AlertDetailOwner], focused: bool) -> AsyncIterator[dict[str, Any]]:
+    """answer_chat as a stream of events: {"type": "delta", "text"} pieces, then one
+    {"type": "done", "available"}. Never raises: the response has already started.
+
+    The same fixed text as answer_chat, placed for a stream: the alert's reminder
+    goes out with the model's first piece (so it is on screen before any of the
+    model's words, and absent if the model produces none), and the open-alert note
+    goes last. Pieces are shown as plain text by the dashboard; the history it
+    sends back is scrubbed of fence tags by build_chat_messages, as before.
+    """
+    if model is None:
+        yield {"type": "delta", "text": CHAT_UNAVAILABLE_REPLY}
+        yield {"type": "done", "available": False}
+        return
+    reminder = caution_for(alerts[0] if alerts else None) if focused else None
+    sent = 0
+    failed = False
+    pieces = model.chat_stream(CHAT_SYSTEM_PROMPT, build_chat_messages(history, build_chat_context(alerts, focused)),
+                               max_tokens=CHAT_REPLY_MAX_TOKENS, temperature=CHAT_TEMPERATURE)
+    try:
+        async for piece in pieces:
+            if not isinstance(piece, str):
+                continue
+            if sent == 0:
+                piece = piece.lstrip()
+                if not piece:
+                    continue
+                if reminder:
+                    yield {"type": "delta", "text": f"{reminder}\n\n"}
+            if sent + len(piece) >= CHAT_REPLY_MAX_CHARS:
+                # Same cap as the non-streaming reply; closing the runtime's
+                # stream stops generation rather than discarding the rest.
+                yield {"type": "delta", "text": piece[:CHAT_REPLY_MAX_CHARS - sent] + "…"}
+                sent = CHAT_REPLY_MAX_CHARS
+                break
+            sent += len(piece)
+            yield {"type": "delta", "text": piece}
+    except Exception as error:
+        logger.warning("Local AI chat stream failed: %s", error)
+        failed = True
+    finally:
+        await pieces.aclose()
+    if sent == 0:
+        yield {"type": "delta", "text": CHAT_UNAVAILABLE_REPLY}
+        yield {"type": "done", "available": False}
+        return
+    if failed:
+        yield {"type": "delta", "text": f"\n\n{CHAT_STOPPED_NOTE}"}
+    if not focused and any(needs_help(alert) for alert in alerts):
+        yield {"type": "delta", "text": f"\n\n{OPEN_GET_HELP_NOTE}"}
+    yield {"type": "done", "available": True}
 
 
 def clean_title(text: object) -> str | None:

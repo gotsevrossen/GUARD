@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import platform
@@ -13,13 +14,13 @@ from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .db import Database, PasswordTooLongError, default_db_path, discard_first_run_password
-from .llm import CHAT_CONTEXT_MAX_ALERTS, TriageModel, answer_chat, suggest_title
+from .llm import CHAT_CONTEXT_MAX_ALERTS, TriageModel, answer_chat, stream_chat, suggest_title
 from .paths import bundle_dir, is_desktop
 from .schema import AlertDetailOwner, AlertStatus, ChatReply, ChatRequest, ChatTitle, ChatTitleRequest
 
@@ -314,6 +315,26 @@ async def chat(body: ChatRequest, user=Depends(require(*ALL_ROLES))) -> ChatRepl
     # the event loop, and so every other dashboard request, responsive meanwhile.
     reply, available = await answer_chat(chat_model(), body.messages, alerts, focused=body.alert_id is not None)
     return ChatReply(reply=reply, available=available)
+
+
+@app.post("/api/chat/stream")
+async def chat_stream(body: ChatRequest, user=Depends(require(*ALL_ROLES))) -> StreamingResponse:
+    """/api/chat as newline-delimited JSON events, so the owner sees the answer
+    being written instead of a minute of nothing. Same checks and same fixed text.
+
+    Validation, auth and the 404 all happen before the response starts; after that
+    the stream never errors, it ends with a "done" event. Starlette cancels the
+    generator when the browser disconnects, which stops generation.
+    """
+    alerts = await asyncio.to_thread(_chat_alerts, body.alert_id)
+    if alerts is None: raise HTTPException(404, "Alert not found")
+
+    async def events():
+        async for event in stream_chat(chat_model(), body.messages, alerts, focused=body.alert_id is not None):
+            yield json.dumps(event) + "\n"
+
+    # no-store: an answer about this network must not sit in any cache.
+    return StreamingResponse(events(), media_type="application/x-ndjson", headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/chat/title", response_model=ChatTitle)

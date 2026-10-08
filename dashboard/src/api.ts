@@ -26,6 +26,33 @@ async function chat(messages:ChatMessage[], alertId:number|null):Promise<ChatRep
     return { reply:body.reply, available:body.available };
   } finally { clearTimeout(timer); }
 }
+/* The streamed form of chat(): newline-delimited JSON events, "delta" pieces then one "done". onDelta sees each piece as it arrives. The timeout is an idle limit, reset by every chunk: the first piece can take minutes on a slow CPU, later ones arrive steadily. A stream that ends without "done" throws, and the caller keeps whatever text already arrived. */
+async function chatStream(messages:ChatMessage[], alertId:number|null, onDelta:(text:string)=>void):Promise<{available:boolean}> {
+  const controller=new AbortController(); let timer=setTimeout(()=>controller.abort(),CHAT_TIMEOUT_MS);
+  const alive=()=>{ clearTimeout(timer); timer=setTimeout(()=>controller.abort(),CHAT_TIMEOUT_MS); };
+  try {
+    const response=await fetch('/api/chat/stream',{method:'POST',headers:{Authorization:`Bearer ${session?.token}`,'content-type':'application/json'},body:JSON.stringify({messages,alert_id:alertId}),signal:controller.signal});
+    if(!response.ok) throw Object.assign(new Error(await response.text()),{status:response.status});
+    if(!response.body) throw new Error('Chat stream unavailable');
+    const reader=response.body.getReader(); const decoder=new TextDecoder(); let buffer='';
+    for(;;) {
+      const { value, done }=await reader.read();
+      if(done) break;
+      alive();
+      buffer+=decoder.decode(value,{stream:true});
+      for(let end=buffer.indexOf('\n'); end>=0; end=buffer.indexOf('\n')) {
+        const line=buffer.slice(0,end).trim(); buffer=buffer.slice(end+1);
+        if(!line) continue;
+        /* model text arrives as data; anything off-shape ends the stream as a failure */
+        const event=JSON.parse(line) as { type?:unknown; text?:unknown; available?:unknown };
+        if(event.type==='delta' && typeof event.text==='string') onDelta(event.text);
+        else if(event.type==='done' && typeof event.available==='boolean') { void reader.cancel().catch(()=>{}); return { available:event.available }; }
+        else throw new Error('Unexpected chat event');
+      }
+    }
+    throw new Error('Chat stream ended early');
+  } finally { clearTimeout(timer); }
+}
 async function chatTitle(question:string):Promise<string|null> { const body=await request('/api/chat/title',{method:'POST',body:JSON.stringify({question})}); return body && typeof body==='object' && typeof body.title==='string' && body.title.trim() ? body.title : null; }
 
-export const api = { chat, chatTitle, alerts:()=>request('/api/alerts'), detail:(id:number)=>request(`/api/alerts/${id}`), trends:()=>request('/api/trends'), preferences:()=>request('/api/preferences'), setPreference:(key:string,value:string)=>request('/api/preferences',{method:'PUT',body:JSON.stringify({key,value})}), health:()=>request('/api/advanced/health'), devices:()=>request('/api/advanced/devices'), setStatus:(id:number,status:string)=>request(`/api/alerts/${id}/status`,{method:'PATCH',body:JSON.stringify({status})}), users:()=>request('/api/users'), createUser:(username:string,password:string,role:string)=>request('/api/users',{method:'POST',body:JSON.stringify({username,password,role})}), changePassword:async (current_password:string,new_password:string):Promise<Session|null>=>{ const result=await request('/api/auth/password',{method:'POST',body:JSON.stringify({current_password,new_password})}); const next = isSession(result) ? result as Session : session ? { ...session, must_change_password:false } : null; persist(next); return next; } };
+export const api = { chat, chatStream, chatTitle, alerts:()=>request('/api/alerts'), detail:(id:number)=>request(`/api/alerts/${id}`), trends:()=>request('/api/trends'), preferences:()=>request('/api/preferences'), setPreference:(key:string,value:string)=>request('/api/preferences',{method:'PUT',body:JSON.stringify({key,value})}), health:()=>request('/api/advanced/health'), devices:()=>request('/api/advanced/devices'), setStatus:(id:number,status:string)=>request(`/api/alerts/${id}/status`,{method:'PATCH',body:JSON.stringify({status})}), users:()=>request('/api/users'), createUser:(username:string,password:string,role:string)=>request('/api/users',{method:'POST',body:JSON.stringify({username,password,role})}), changePassword:async (current_password:string,new_password:string):Promise<Session|null>=>{ const result=await request('/api/auth/password',{method:'POST',body:JSON.stringify({current_password,new_password})}); const next = isSession(result) ? result as Session : session ? { ...session, must_change_password:false } : null; persist(next); return next; } };
