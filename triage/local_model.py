@@ -58,6 +58,10 @@ class _StreamFailed:
 # Sentinel the worker sends when generation has ended, normally or not.
 _STREAM_END = object()
 
+# A saved chat state is roughly 130 KB per token with Phi-4-mini; 512 MB keeps the
+# last couple of conversations without crowding an 8 GB machine.
+CHAT_PROMPT_CACHE_BYTES = 512 * 1024 * 1024
+
 
 def _int_env(name: str, default: int, minimum: int) -> int:
     value = os.getenv(name, "").strip()
@@ -81,13 +85,91 @@ class LlamaCppSettings:
     gpu_layers: int = 0
     # Bounds inference time per alert; a complete reply is ~200 tokens.
     max_tokens: int = 512
+    # CPU threads for llama.cpp; None picks them from the processor (plan_threads).
+    threads: int | None = None
 
     @classmethod
     def from_env(cls) -> "LlamaCppSettings":
         path = os.getenv("LIGHTHOUSE_MODEL_PATH", "").strip()
+        threads = _int_env("LIGHTHOUSE_MODEL_THREADS", 0, minimum=0)
         return cls(model_path=Path(path) if path else None,
                    context_size=_int_env("LIGHTHOUSE_MODEL_CONTEXT_SIZE", 4096, minimum=512),
-                   gpu_layers=_int_env("LIGHTHOUSE_MODEL_GPU_LAYERS", 0, minimum=-1))
+                   gpu_layers=_int_env("LIGHTHOUSE_MODEL_GPU_LAYERS", 0, minimum=-1),
+                   threads=threads or None)
+
+
+def choose_inference_cores(cpus: list[tuple[int, int, int, int]]) -> tuple[list[int], int]:
+    """Which logical processors llama.cpp should run on, and how many threads.
+
+    `cpus` is (cpu set id, physical core, last-level cache, efficiency class) per
+    logical processor. llama.cpp splits each step evenly across its threads and
+    waits for the slowest, so a thread on a very slow core holds back all the
+    others. Hybrid laptop chips (Intel Core Ultra) add a tiny island of low-power
+    cores on their own cache; those are left out. Everything else is used, one
+    thread per physical core (hyperthread siblings add little to this workload).
+    """
+    if not cpus:
+        return [], 0
+    classes = {efficiency for *_, efficiency in cpus}
+    skip: set[int] = set()
+    if len(classes) > 1:
+        lowest = min(classes)
+        islands: dict[int, tuple[set[int], set[int]]] = {}
+        for _, core, cache, efficiency in cpus:
+            effs, cores = islands.setdefault(cache, (set(), set()))
+            effs.add(efficiency)
+            cores.add(core)
+        if len(islands) > 1:
+            skip = {cache for cache, (effs, cores) in islands.items() if effs == {lowest} and len(cores) <= 2}
+    kept = [cpu for cpu in cpus if cpu[2] not in skip] or cpus
+    return [cpu[0] for cpu in kept], len({cpu[1] for cpu in kept})
+
+
+def _windows_cpu_sets() -> list[tuple[int, int, int, int]] | None:
+    """(id, core, cache, efficiency class) per logical processor, or None."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        length = wintypes.ULONG(0)
+        kernel32.GetSystemCpuSetInformation(None, 0, ctypes.byref(length), None, 0)
+        buffer = ctypes.create_string_buffer(length.value)
+        if not kernel32.GetSystemCpuSetInformation(buffer, length, ctypes.byref(length), None, 0):
+            return None
+        raw, offset, cpus = buffer.raw, 0, []
+        while offset < length.value:
+            size = int.from_bytes(raw[offset:offset + 4], "little")
+            # SYSTEM_CPU_SET_INFORMATION: Id @8, CoreIndex @15,
+            # LastLevelCacheIndex @16, EfficiencyClass @18.
+            cpus.append((int.from_bytes(raw[offset + 8:offset + 12], "little"),
+                         raw[offset + 15], raw[offset + 16], raw[offset + 18]))
+            offset += size or len(raw)
+        return cpus
+    except (OSError, AttributeError, ValueError):
+        return None
+
+
+def plan_threads(settings: LlamaCppSettings) -> int | None:
+    """Thread count for llama.cpp; on Windows also steers this process off the
+    slowest cores. None leaves llama.cpp's own default. Never raises."""
+    if settings.threads:
+        return settings.threads
+    if sys.platform != "win32":
+        return None
+    cpus = _windows_cpu_sets()
+    if not cpus:
+        return None
+    ids, physical = choose_inference_cores(cpus)
+    if 0 < len(ids) < len(cpus):
+        try:
+            import ctypes
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            array = (ctypes.c_ulong * len(ids))(*ids)
+            kernel32.SetProcessDefaultCpuSets(kernel32.GetCurrentProcess(), array, len(ids))
+        except (OSError, AttributeError):
+            pass  # a preference only; the thread count still applies
+    logger.info("Local AI uses %d threads on %d of %d logical processors", physical, len(ids), len(cpus))
+    return physical or None
 
 
 def cpu_supported() -> bool:
@@ -133,6 +215,12 @@ def load_llama(settings: LlamaCppSettings):
     # use_mmap is llama.cpp's default, spelled out because the design relies on it:
     # the ingestion and API services each load the model, and a memory-mapped file
     # is shared through the OS page cache instead of held twice.
+    threads = plan_threads(settings)
+    if threads:
+        # Prompt reading (batch) gets the same cores as writing: on a hybrid laptop
+        # llama.cpp's default of every logical processor includes the slowest ones.
+        return Llama(model_path=str(path), n_ctx=settings.context_size, n_threads=threads,
+                     n_threads_batch=threads, n_gpu_layers=settings.gpu_layers, use_mmap=True, verbose=False)
     return Llama(model_path=str(path), n_ctx=settings.context_size,
                  n_gpu_layers=settings.gpu_layers, use_mmap=True, verbose=False)
 
@@ -186,6 +274,7 @@ class LlamaCppTriageModel(TriageModel):
         # the thread lock still holds if a waiting task is cancelled mid-inference.
         self._lock = asyncio.Lock()
         self._thread_lock = threading.Lock()
+        self._prompt_cache_ready = False
 
     async def triage(self, alert: NormalizedAlert) -> TriageResult:
         async with self._lock:
@@ -275,6 +364,7 @@ class LlamaCppTriageModel(TriageModel):
             def produce() -> None:
                 try:
                     with self._thread_lock:
+                        self._enable_prompt_cache()
                         stream = self._llama.create_chat_completion(
                             messages=[{"role": "system", "content": system}, *messages],
                             temperature=temperature,
@@ -309,9 +399,28 @@ class LlamaCppTriageModel(TriageModel):
                 # to its next stop check, and the thread lock keeps the context safe.
                 await asyncio.shield(worker)
 
+    def _enable_prompt_cache(self) -> None:
+        """Keep recent prompt states so a chat need not re-read what it already read.
+
+        llama.cpp reuses its context for a prompt that starts like the previous one,
+        so a follow-up question costs only its new words. But the chat title asked
+        in between replaces that context; the RAM cache keeps the chat's state and
+        restores it. Called with the thread lock held; chat only (the API process).
+        """
+        if self._prompt_cache_ready:
+            return
+        self._prompt_cache_ready = True
+        try:
+            from llama_cpp import LlamaRAMCache
+            self._llama.set_cache(LlamaRAMCache(capacity_bytes=CHAT_PROMPT_CACHE_BYTES))
+        except Exception as error:
+            # Slower, not broken: every question is read in full instead.
+            logger.warning("Local AI prompt cache unavailable: %s", error)
+
     def _chat_blocking(self, system: str, messages: list[dict[str, str]], max_tokens: int,
                        temperature: float) -> str | None:
         with self._thread_lock:
+            self._enable_prompt_cache()
             response = self._llama.create_chat_completion(
                 messages=[{"role": "system", "content": system}, *messages],
                 temperature=temperature,
@@ -344,6 +453,7 @@ def smoke_test(settings: LlamaCppSettings) -> dict[str, Any]:
     else:
         raise ModelUnavailable(f"model output failed validation: {last_error}")
     return {"ok": True, "model": str(settings.model_path), "severity": str(result.severity), "attempt": attempt,
+            "threads": plan_threads(settings) or "llama.cpp default",
             "load_seconds": round(loaded - started, 1),
             "inference_seconds": round(time.perf_counter() - loaded, 1)}
 
@@ -354,6 +464,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("check-cpu", help=f"exit 0 if this CPU can run the bundled runtime, {EXIT_UNSUPPORTED_CPU} if not")
     smoke = sub.add_parser("smoke-test", help="load the GGUF model and validate one triage")
     smoke.add_argument("--model-path", type=Path, help="defaults to LIGHTHOUSE_MODEL_PATH")
+    smoke.add_argument("--threads", type=int, help="CPU threads to try (default: chosen from this processor)")
     args = parser.parse_args(argv)
     if args.command == "check-cpu":
         if cpu_supported():
@@ -364,6 +475,8 @@ def main(argv: list[str] | None = None) -> int:
     settings = LlamaCppSettings.from_env()
     if args.model_path:
         settings = replace(settings, model_path=args.model_path)
+    if args.threads:
+        settings = replace(settings, threads=max(1, args.threads))
     try:
         print(json.dumps(smoke_test(settings)))
     except Exception as error:

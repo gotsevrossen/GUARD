@@ -146,26 +146,34 @@ p{line-height:1.55}
 .thread .turn p+p{margin-top:10px}
 .thread .turn.them .mark{display:block;width:26px;height:26px;margin-bottom:12px;border-radius:50%;
   background:var(--green)}
-/* "LightHouse is replying": a small green swell with drops splashing off the crest.
-   Brand tokens only. The swells slide exactly one wave period (60 user units) so
-   the loop is seamless; the svg clips the second period. */
-.wave{display:block;width:60px;height:24px;margin-top:6px}
-.wave svg{display:block;width:100%;height:100%;overflow:hidden}
-.wave .back path{fill:var(--green);opacity:.4}
-.wave .front path{fill:var(--green)}
-.wave .drops circle{fill:var(--green-dark);opacity:0}
-.wave .back{animation:swell 2.6s linear infinite}
-.wave .front{animation:swell 1.7s linear infinite}
-@keyframes swell{from{transform:translateX(0)}to{transform:translateX(-60px)}}
-.wave .drops circle{animation:splash 1.7s ease-out infinite}
-.wave .drops circle:nth-child(1){--drift:-5px}
-.wave .drops circle:nth-child(2){--drift:2px;animation-delay:.45s}
-.wave .drops circle:nth-child(3){--drift:6px;animation-delay:.9s}
+/* "LightHouse is replying": the speaker dot becomes a round tank of water, with
+   swells rolling through it, drops splashing off the crest and an arc running round
+   the rim like a loading ring. Brand tokens only (tints mixed from --green). The
+   swells slide exactly one period (26 user units = 26px) so the loop is seamless. */
+.thread .turn.them .wave-mark{background:transparent;border-radius:0}
+.wave-mark svg{display:block;width:100%;height:100%;overflow:visible}
+.wave-mark .tank{fill:color-mix(in srgb,var(--green) 14%,var(--paper))}
+.wave-mark .rim{fill:none;stroke:color-mix(in srgb,var(--green) 30%,transparent);stroke-width:2}
+.wave-mark .ring{fill:none;stroke:var(--green-dark);stroke-width:2;stroke-linecap:round;
+  stroke-dasharray:24 76;transform-box:fill-box;transform-origin:50% 50%;animation:ring-turn 1.1s linear infinite}
+.wave-mark .back path{fill:var(--green);opacity:.45}
+.wave-mark .front path{fill:var(--green)}
+.wave-mark .drops circle{fill:var(--green-dark);opacity:0}
+.wave-mark .back{animation:swell 2.4s linear infinite}
+.wave-mark .front{animation:swell 1.6s linear infinite}
+.wave-mark .water{animation:bob 2.2s ease-in-out infinite}
+.wave-mark .drops circle{animation:splash 1.6s ease-out infinite}
+.wave-mark .drops circle:nth-child(1){--drift:-2px}
+.wave-mark .drops circle:nth-child(2){--drift:.5px;animation-delay:.5s}
+.wave-mark .drops circle:nth-child(3){--drift:2px;animation-delay:1s}
+@keyframes swell{from{transform:translateX(0)}to{transform:translateX(-26px)}}
+@keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-1.5px)}}
+@keyframes ring-turn{to{transform:rotate(360deg)}}
 @keyframes splash{
-  0%{transform:translate(0,5px);opacity:0}
+  0%{transform:translate(0,3px);opacity:0}
   15%{opacity:1}
-  50%{transform:translate(var(--drift),-8px);opacity:1}
-  100%{transform:translate(calc(var(--drift) * 2),6px);opacity:0}}
+  50%{transform:translate(var(--drift),-4px);opacity:1}
+  100%{transform:translate(calc(var(--drift) * 2),3px);opacity:0}}
 
 /* ---- Skeleton shown while a page's data has not arrived ---- */
 .sk{display:block;border-radius:8px;
@@ -252,8 +260,10 @@ main:not(.with-dock) .dock{display:none}
 /* content fades out as it passes behind the composer */
 .dock::before{content:"";position:absolute;left:0;right:0;bottom:100%;height:40px;
   background:linear-gradient(to bottom,transparent,var(--ground));pointer-events:none}
-/* the composer glows in the brand green, mixed from the token rather than a new colour */
-.dock form{display:flex;align-items:flex-end;gap:10px;padding:10px;border-radius:var(--r-md);background:var(--paper);
+/* the composer glows in the brand green, mixed from the token rather than a new colour.
+   Raised above the dock's fade strip (an absolutely positioned ::before, which would
+   otherwise paint over the top of the glow). */
+.dock form{position:relative;z-index:1;display:flex;align-items:flex-end;gap:10px;padding:10px;border-radius:var(--r-md);background:var(--paper);
   box-shadow:0 0 0 1px color-mix(in srgb,var(--green) 35%,transparent),0 6px 26px color-mix(in srgb,var(--green) 30%,transparent);
   transition:box-shadow .2s ease}
 .dock form:focus-within{box-shadow:0 0 0 1.5px var(--green),0 8px 32px color-mix(in srgb,var(--green) 42%,transparent)}
@@ -284,7 +294,9 @@ main:not(.with-dock) .dock{display:none}
 .login .error{margin:2px 0 0;font-size:.86rem;color:#ffe0da}
 
 @media (prefers-reduced-motion:reduce){
-  .sk,.wave g,.wave circle{animation:none}
+  .sk,.wave-mark g,.wave-mark circle{animation:none}
+  /* a still ring segment would read as broken, so the plain rim stands alone */
+  .wave-mark .ring{display:none}
 }
 
 @media (max-width:720px){

@@ -254,6 +254,12 @@ installers. Honor a dependency's reported reboot requirement.
 | LIGHTHOUSE_MODEL_PATH | unset; installer sets the GGUF path under `models` |
 | LIGHTHOUSE_MODEL_CONTEXT_SIZE | `4096` tokens |
 | LIGHTHOUSE_MODEL_GPU_LAYERS | `0` (CPU only; see Local AI) |
+| LIGHTHOUSE_MODEL_THREADS | automatic: one thread per physical core, skipping the separate low-power core island of hybrid laptop CPUs (Intel Core Ultra). Set `"ModelThreads": N` in `windows.json` and rerun setup to override; compare values with `python -m triage.local_model smoke-test --threads N` |
+
+The background triage service runs at below-normal CPU priority, so a chat the
+owner is waiting on always gets the processor first. Chat keeps recent prompt
+states in a 512 MB in-memory cache, so follow-up questions re-read only their new
+words.
 
 Set a channel/path to an empty string to disable that input. Windows ignores
 `LIGHTHOUSE_WAZUH_PATH` and `LIGHTHOUSE_ZEEK_PATH`. Linux keeps its existing file

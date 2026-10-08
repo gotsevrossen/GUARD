@@ -35,7 +35,9 @@ LightHouse is a Windows application. The older Linux build is no longer maintain
 6. Wait. Setup installs the sensors and downloads the AI model, which can take a while on a slow connection.
 7. On the last page, leave **Open the LightHouse dashboard** ticked and click **Finish**.
 
-LightHouse runs in the background and starts with Windows, so there is nothing to launch. To open the dashboard again, use the **LightHouse Dashboard** shortcut on the desktop or in the Start menu, or go to `http://127.0.0.1:8000` in your browser.
+LightHouse runs in the background and starts with Windows, so there is nothing to launch. To open the dashboard again, use the **LightHouse Dashboard** shortcut on the desktop or in the Start menu. It opens in its own window, with no address bar or tabs and its own taskbar icon, like an app. To keep it on the taskbar, right-click its icon there and choose **Pin to taskbar**. You can also go to `http://127.0.0.1:8000` in any browser.
+
+The window is Microsoft Edge in app mode, so you sign in once there; chats are saved per browser. If Edge has been removed, the shortcuts open your default browser instead.
 
 ### First sign-in
 
@@ -187,6 +189,14 @@ cd dashboard; npm ci; npm run build      # dashboard -> dashboard/dist
 # The installer (needs an AVX2 CPU and the Visual C++ runtime on the build machine)
 powershell -NoProfile -ExecutionPolicy Bypass -File packaging/windows/build.ps1   # -> dist/LightHouse-Setup.exe
 ```
+
+To try code changes on a computer that already has LightHouse installed, without rerunning the installer, run this from the repository in **PowerShell as administrator**:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\dev-update.ps1
+```
+
+It rebuilds the dashboard, copies LightHouse's own code into the installed copy and restarts the services, in seconds. It doesn't touch Python dependencies, Suricata, Sysmon, the AI model or settings. After changing `pyproject.toml`, `uv.lock` or `install.ps1`, run the full installer instead. It's for development only and never part of a release.
 
 For dashboard work with hot reload:
 

@@ -11,7 +11,7 @@ LightHouse is now a **Windows-only** product. Build, test and design for Windows
 - **Local AI:** llama.cpp in-process (`llama-cpp-python`, exact pin) running a Phi-4-mini GGUF model
 - **Services:** NSSM runs the API, ingestion and Suricata as Windows services
 - **Packaging:** Inno Setup → `dist/LightHouse-Setup.exe` (`packaging/windows/`)
-- **UI:** the Start-menu shortcut opens the dashboard at `http://127.0.0.1:8000` in the default browser (no native window)
+- **UI:** the Start-menu and desktop shortcuts open the dashboard at `http://127.0.0.1:8000` in its own window (Microsoft Edge app mode, `--app=`), backed by `dashboard/public/manifest.json`; default browser if Edge is absent. No pywebview, no service worker (nothing is cached offline)
 - **Network exposure:** loopback only
 
 Notes:

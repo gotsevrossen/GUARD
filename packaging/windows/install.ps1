@@ -302,12 +302,16 @@ try {
         # rotated and renamed on every restart.
         "LIGHTHOUSE_FIRST_RUN_DIR=$DataDir",
         "LIGHTHOUSE_MODEL_PATH=$modelPath")
+    # Optional "ModelThreads" in windows.json overrides the automatic choice.
+    if ($config.ModelThreads -and [int]$config.ModelThreads -gt 0) { $environment += "LIGHTHOUSE_MODEL_THREADS=$([int]$config.ModelThreads)" }
     Register 'LightHouse-API' $python "-m uvicorn triage.api:app --host 127.0.0.1 --port $($config.ApiPort)" $environment
     Start-Service LightHouse-API
     # API seeds first, placing the existing credential banner in API stdout.
     Wait-Http "http://127.0.0.1:$($config.ApiPort)/api/health" | Out-Null
     Register 'LightHouse-Ingestion' $python '-m triage.main tail' $environment
     Nssm @('set', 'LightHouse-Ingestion', 'DependOnService', 'LightHouse-API', 'LightHouse-Suricata', 'EventLog')
+    # Background triage yields the CPU to a chat the owner is waiting on.
+    Nssm @('set', 'LightHouse-Ingestion', 'AppPriority', 'BELOW_NORMAL_PRIORITY_CLASS')
     $ingestionStarted = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     Start-Service LightHouse-Ingestion
     Start-Sleep -Seconds 5

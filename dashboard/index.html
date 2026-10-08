@@ -4,6 +4,12 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>LightHouse</title>
+  <!-- Lets Edge/Chrome run the dashboard in its own window ("install as app"), which
+       is how the Start-menu shortcut opens it. Deliberately no service worker: nothing
+       here should be cached for offline use, least of all alert data. -->
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="icon" type="image/png" href="/assets/app-icon-192.png" />
+  <meta name="theme-color" content="#2A9679" />
   <!-- No web fonts: this page must render identically on an air-gapped appliance,
        and a blocked font request would otherwise stall first paint. -->
   <!-- The boot overlay is inlined rather than rendered by React, so the green

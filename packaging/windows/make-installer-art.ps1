@@ -49,13 +49,19 @@ function Draw-Centered($Graphics, [string]$Text, $Font, [Drawing.Color]$Color, [
     $Graphics.DrawString($Text, $Font, $brush, (New-Object Drawing.RectangleF 0, $Top, $Width, 400), $format)
 }
 
-# Welcome/finish page panel. 164x314 is Inno's 100% size; 200% for high DPI.
-foreach ($scale in 1, 2) {
-    $w, $h = [int](164 * $scale), [int](314 * $scale)
+# Every Windows display scale gets its own exact-size image, so Setup never has to
+# resize one (a resized full-bleed mark lands a pixel off centre).
+$scales = 1, 1.25, 1.5, 1.75, 2
+
+# Welcome/finish page panel. 164x314 is Inno's 100% size.
+foreach ($scale in $scales) {
+    $w, $h = [int][math]::Round(164 * $scale), [int][math]::Round(314 * $scale)
     $bitmap, $g = New-Canvas $w $h
     $g.Clear($green)
-    $mark = 100 * $scale
-    Draw-Mark $g (($w - $mark) / 2) (44 * $scale) $mark
+    # Whole pixels, and the same margin on both sides.
+    $mark = [int][math]::Round(100 * $scale)
+    if (($w - $mark) % 2) { $mark-- }
+    Draw-Mark $g (($w - $mark) / 2) ([math]::Round(44 * $scale)) $mark
     # Uppercase extra-bold, like the dashboard's h1.
     $title = New-Font @('Segoe UI Black', 'Segoe UI') (19 * $scale) ([Drawing.FontStyle]::Bold)
     Draw-Centered $g 'LIGHTHOUSE' $title ([Drawing.Color]::White) (160 * $scale) $w
@@ -70,18 +76,21 @@ foreach ($scale in 1, 2) {
 }
 
 # Header mark on the green page header. 55x55 at 100%.
-foreach ($scale in 1, 2) {
-    $size = [int](55 * $scale)
+foreach ($scale in $scales) {
+    $size = [int][math]::Round(55 * $scale)
+    $inset = [int][math]::Round(2 * $scale)
     $bitmap, $g = New-Canvas $size $size
     $g.Clear([Drawing.Color]::Transparent)
-    Draw-Mark $g (2 * $scale) (2 * $scale) ($size - 4 * $scale)
+    Draw-Mark $g $inset $inset ($size - 2 * $inset)
     $bitmap.Save("$Out\header-$($scale * 100).png", [Drawing.Imaging.ImageFormat]::Png)
     $g.Dispose(); $bitmap.Dispose()
 }
 
 # Icon for Setup, the shortcuts and Apps & features. Small sizes as 32-bit DIBs
-# (what every consumer of .ico reads), 256 as PNG (the Vista+ convention).
-$entries = foreach ($size in 16, 24, 32, 48, 64, 128, 256) {
+# (what every consumer of .ico reads), 256 as PNG (the Vista+ convention). Every
+# size the taskbar, title bar and Explorer ask for at 100-200% scaling is present,
+# so Windows never scales a neighbouring size (taskbar: 24/30/36/48).
+$entries = foreach ($size in 16, 20, 24, 30, 32, 36, 40, 48, 64, 96, 128, 256) {
     $bitmap, $g = New-Canvas $size $size
     $g.Clear([Drawing.Color]::Transparent)
     Draw-Mark $g 0 0 $size
@@ -126,5 +135,16 @@ foreach ($entry in $entries) {
 foreach ($entry in $entries) { $writer.Write($entry.Data) }
 $writer.Flush()
 [IO.File]::WriteAllBytes("$Out\lighthouse.ico", $file.ToArray())
+
+# Dashboard app icons (web app manifest and favicon): what Edge and Chrome show for
+# LightHouse's own window and taskbar entry.
+$assets = "$PSScriptRoot\..\..\dashboard\public\assets"
+foreach ($size in 192, 512) {
+    $bitmap, $g = New-Canvas $size $size
+    $g.Clear([Drawing.Color]::Transparent)
+    Draw-Mark $g 0 0 $size
+    $bitmap.Save("$assets\app-icon-$size.png", [Drawing.Imaging.ImageFormat]::Png)
+    $g.Dispose(); $bitmap.Dispose()
+}
 $logoImage.Dispose()
 Get-ChildItem $Out | Select-Object Name, Length

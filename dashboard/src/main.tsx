@@ -1,4 +1,4 @@
-import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, KeyboardEvent, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { api, Alert, getSession, login, logout, Session, statusOf } from './api';
 import { clip, Conversation, loadConversations, MAX_QUESTION, newId, saveConversations, titleFor, toChatMessages, Turn } from './conversations';
@@ -295,24 +295,37 @@ function Home({ alerts, canSeeEvidence, act, ask, evidence }: PageProps) {
   );
 }
 
-/* LightHouse's "working" mark: two swells rolling past at different speeds, with
-   drops splashing up off the crest. Brand greens only; static under reduced motion.
-   Each wave path spans two periods so sliding it one period loops seamlessly. */
-const Wave = () => (
-  <span className="wave" role="status" aria-label="LightHouse is replying">
-    <svg viewBox="0 0 60 24" aria-hidden="true" focusable="false">
-      <g className="drops"><circle cx="20" cy="13" r="1.7" /><circle cx="31" cy="12" r="1.3" /><circle cx="41" cy="13" r="1.5" /></g>
-      <g className="swell back"><path d="M0 15 Q15 10 30 15 T60 15 T90 15 T120 15 V24 H0 Z" /></g>
-      <g className="swell front"><path d="M0 17 Q15 21 30 17 T60 17 T90 17 T120 17 V24 H0 Z" /></g>
-    </svg>
-  </span>
-);
+/* LightHouse's "working" mark: the green speaker dot turns into a small round tank of
+   water. Two swells roll through it at different speeds, drops splash off the crest,
+   the water bobs, and an arc runs round the rim like a loading ring. Brand greens
+   only; static under reduced motion. Each swell spans two periods of the 26-unit
+   circle, so sliding it one period loops seamlessly. */
+function WaveMark() {
+  const clip = `wave-clip-${useId().replace(/:/g, '')}`;
+  return (
+    <span className="mark wave-mark" role="status" aria-label="LightHouse is replying">
+      <svg viewBox="0 0 26 26" aria-hidden="true" focusable="false">
+        <defs><clipPath id={clip}><circle cx="13" cy="13" r="11" /></clipPath></defs>
+        <circle className="tank" cx="13" cy="13" r="11" />
+        <g clipPath={`url(#${clip})`}>
+          <g className="water">
+            <g className="drops"><circle cx="9" cy="12.5" r="1" /><circle cx="13.5" cy="12" r=".8" /><circle cx="17.5" cy="12.5" r=".9" /></g>
+            <g className="swell back"><path d="M0 14 Q6.5 11.5 13 14 T26 14 T39 14 T52 14 V26 H0 Z" /></g>
+            <g className="swell front"><path d="M0 15 Q6.5 17.5 13 15 T26 15 T39 15 T52 15 V26 H0 Z" /></g>
+          </g>
+        </g>
+        <circle className="rim" cx="13" cy="13" r="12" />
+        <circle className="ring" cx="13" cy="13" r="12" pathLength="100" />
+      </svg>
+    </span>
+  );
+}
 
 const paragraphs = (text: string) => text.split(/\n+/).map((line, index) => <p key={index}>{line}</p>);
 
 /* An open conversation. Nothing labels the speaker: a question sits in its own
    card on the right, the answer runs as plain text on the left. While the model
-   writes, its words appear as they arrive, with the wave beneath them. */
+   writes, its words appear as they arrive and its dot is the animated WaveMark. */
 function Thread({ chat, thinking, streamed }: { chat: Conversation; thinking: boolean; streamed: string }) {
   return (
     <div>
@@ -325,7 +338,7 @@ function Thread({ chat, thinking, streamed }: { chat: Conversation; thinking: bo
             {paragraphs(turn.text)}
           </div>
         ))}
-        {thinking && <div className="turn them"><span className="mark" aria-hidden="true" />{streamed.trim() && paragraphs(streamed.trimStart())}<Wave /></div>}
+        {thinking && <div className="turn them"><WaveMark />{streamed.trim() && paragraphs(streamed.trimStart())}</div>}
       </div>
     </div>
   );

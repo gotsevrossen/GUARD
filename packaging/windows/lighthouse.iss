@@ -19,8 +19,9 @@ SolidCompression=yes
 WizardStyle=modern
 ; Artwork is rendered by make-installer-art.ps1 from the dashboard logo and tokens.
 SetupIconFile=art\lighthouse.ico
-WizardImageFile=art\wizard-100.png,art\wizard-200.png
-WizardSmallImageFile=art\header-100.png,art\header-200.png
+; One exact size per Windows display scale, so Setup never resizes them.
+WizardImageFile=art\wizard-100.png,art\wizard-125.png,art\wizard-150.png,art\wizard-175.png,art\wizard-200.png
+WizardSmallImageFile=art\header-100.png,art\header-125.png,art\header-150.png,art\header-175.png,art\header-200.png
 ; The welcome page carries the plain-English "what this does" and requirements.
 DisableWelcomePage=no
 ; Always ask where to install, upgrades included: the folder's drive also holds the
@@ -46,13 +47,19 @@ Source: "configure_suricata.py"; DestDir: "{app}\setup"; Flags: ignoreversion
 Source: "disable_failed_rules.py"; DestDir: "{app}\setup"; Flags: ignoreversion
 Source: "uninstall.ps1"; DestDir: "{app}\setup"; Flags: ignoreversion
 [Icons]
-Name: "{group}\LightHouse Dashboard"; Filename: "http://127.0.0.1:8000"; IconFilename: "{app}\lighthouse.ico"
-Name: "{autodesktop}\LightHouse Dashboard"; Filename: "http://127.0.0.1:8000"; IconFilename: "{app}\lighthouse.ico"; Tasks: desktopicon
+; LightHouse opens in its own window (Edge app mode: no address bar or tabs, its own
+; taskbar entry), like a home-screen web app. Edge ships with Windows; where it has
+; been removed, the same shortcuts open the default browser instead.
+Name: "{group}\LightHouse Dashboard"; Filename: "{code:EdgePath}"; Parameters: "--app=http://127.0.0.1:8000"; IconFilename: "{app}\lighthouse.ico"; Comment: "Open the LightHouse dashboard"; Check: HasEdge
+Name: "{group}\LightHouse Dashboard"; Filename: "http://127.0.0.1:8000"; IconFilename: "{app}\lighthouse.ico"; Check: not HasEdge
+Name: "{autodesktop}\LightHouse Dashboard"; Filename: "{code:EdgePath}"; Parameters: "--app=http://127.0.0.1:8000"; IconFilename: "{app}\lighthouse.ico"; Comment: "Open the LightHouse dashboard"; Tasks: desktopicon; Check: HasEdge
+Name: "{autodesktop}\LightHouse Dashboard"; Filename: "http://127.0.0.1:8000"; IconFilename: "{app}\lighthouse.ico"; Tasks: desktopicon; Check: not HasEdge
 Name: "{group}\LightHouse Logs"; Filename: "{app}\data\logs"
 [Run]
 ; Offered only when dependency setup succeeded; postinstall entries run as the
 ; signed-in user, so the browser does not open elevated.
-Filename: "http://127.0.0.1:8000"; Description: "Open the LightHouse dashboard"; Flags: postinstall shellexec nowait skipifsilent; Check: SetupSucceeded
+Filename: "{code:EdgePath}"; Parameters: "--app=http://127.0.0.1:8000"; Description: "Open the LightHouse dashboard"; Flags: postinstall nowait skipifsilent; Check: SetupSucceeded and HasEdge
+Filename: "http://127.0.0.1:8000"; Description: "Open the LightHouse dashboard"; Flags: postinstall shellexec nowait skipifsilent; Check: SetupSucceeded and not HasEdge
 [UninstallRun]
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\setup\uninstall.ps1"" -AppDir ""{app}"""; Flags: runhidden waituntilterminated; RunOnceId: "RemoveServices"
 [Code]
@@ -67,6 +74,26 @@ end;
 function SetupSucceeded: Boolean;
 begin
   Result := not SetupFailed;
+end;
+
+// Microsoft Edge, for opening the dashboard in its own app window. Found through
+// App Paths (where Edge registers itself), then its standard folder; '' if absent.
+function FindEdge: String;
+begin
+  if not RegQueryStringValue(HKLM, 'SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe', '', Result)
+     or not FileExists(Result) then
+    Result := ExpandConstant('{commonpf32}\Microsoft\Edge\Application\msedge.exe');
+  if not FileExists(Result) then Result := '';
+end;
+
+function HasEdge: Boolean;
+begin
+  Result := FindEdge <> '';
+end;
+
+function EdgePath(Param: String): String;
+begin
+  Result := FindEdge;
 end;
 procedure InitializeWizard;
 begin
