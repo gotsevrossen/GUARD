@@ -260,10 +260,10 @@ type PageProps = {
   alerts: Alert[]; canSeeEvidence: boolean;
   act: (id: number, status: string) => void; ask: Ask; evidence: (alert: Alert) => void;
   /* Background monitoring: shown to everyone; the switch is passed only to admins. */
-  monitoring?: Monitoring | null; monitoringBusy?: boolean; toggleMonitoring?: () => void;
+  monitoring?: Monitoring | null; monitoringBusy?: boolean; toggleMonitoring?: () => void; shutDown?: () => void;
 };
 
-function Home({ alerts, canSeeEvidence, act, ask, evidence, monitoring, monitoringBusy, toggleMonitoring }: PageProps) {
+function Home({ alerts, canSeeEvidence, act, ask, evidence, monitoring, monitoringBusy, toggleMonitoring, shutDown }: PageProps) {
   const open = alerts.filter(alert => alert.status === 'open');
   const urgent = open.filter(alert => URGENT.includes(alert.severity)).length;
   const paused = !!monitoring?.paused;
@@ -280,6 +280,9 @@ function Home({ alerts, canSeeEvidence, act, ask, evidence, monitoring, monitori
             <button className="btn quiet" type="button" disabled={monitoringBusy} onClick={toggleMonitoring}>
               {monitoringBusy ? 'Working…' : paused ? 'Resume monitoring' : 'Pause monitoring'}
             </button>
+          )}
+          {shutDown && monitoring?.available && (
+            <button className="btn quiet" type="button" disabled={monitoringBusy} onClick={shutDown}>Shut down</button>
           )}
         </div>
       </section>
@@ -762,6 +765,15 @@ function App() {
     catch (failure) { window.alert(detailOf(failure, 'LightHouse could not change monitoring. Try again.')); }
     finally { setMonitoringBusy(false); }
   };
+  /* Everything off, the dashboard included, until LightHouse is opened again. */
+  const [stopped, setStopped] = useState(false);
+  const shutDown = async () => {
+    if (!window.confirm('Shut down LightHouse? Monitoring, the local AI and this dashboard stop, and stay off after a restart, until you open LightHouse again from the Start menu or desktop.')) return;
+    setMonitoringBusy(true);
+    try { await api.shutdown(); setStopped(true); }
+    catch (failure) { window.alert(detailOf(failure, 'LightHouse could not shut down. Try again.')); }
+    finally { setMonitoringBusy(false); }
+  };
   /* Checked on every load of the dashboard (the server caches GitHub's answer);
      admins are the ones who can install, so only they are asked. */
   const [release, setRelease] = useState<UpdateInfo | null>(null);
@@ -843,12 +855,23 @@ function App() {
   const act = async (id: number, status: string) => { await api.setStatus(id, status); load(); };
   const showEvidence = async (alert: Alert) => { setSelected(await api.detail(alert.id)); setTab('advanced'); };
 
+  if (stopped) return (
+    <main className="login">
+      <section role="status">
+        <img src="/assets/lighthouse-logo.png" alt="LightHouse" />
+        <p className="eyebrow">LightHouse</p>
+        <h1>LightHouse is shut down.</h1>
+        <p>Monitoring and the local AI are off, and stay off after a restart. To start again, open LightHouse from the Start menu or desktop. You can close this window.</p>
+      </section>
+    </main>
+  );
   if (!session) return <Login onLogin={setSession} />;
   if (session.must_change_password) return <ChangePassword session={session} onDone={setSession} />;
 
   const canSeeEvidence = advanced(session.role);
   const pageProps: PageProps = { alerts: alerts || [], canSeeEvidence, act, ask, evidence: showEvidence, monitoring, monitoringBusy,
-    toggleMonitoring: session.role === 'admin' ? toggleMonitoring : undefined };
+    toggleMonitoring: session.role === 'admin' ? toggleMonitoring : undefined,
+    shutDown: session.role === 'admin' ? shutDown : undefined };
   const chat = chats.find(entry => entry.id === activeId);
   const primary = ['home', 'alerts', 'trends', ...(canSeeEvidence ? ['advanced'] : [])];
   /* While a reply is pending the draft stays editable but is not sent. */
@@ -979,13 +1002,14 @@ function UpdateDialog({ info, onClose }: { info: UpdateInfo; onClose: () => void
   };
   return (
     <dialog ref={dialog} className="update" onClose={onClose} onCancel={event => { if (busy) event.preventDefault(); }} aria-labelledby="update-title">
-      <p className="eyebrow">{busy ? 'Updating' : 'Update available'}</p>
+      {busy
+        ? <p className="eyebrow with-mark"><WaveMark label={null} />Updating</p>
+        : <p className="eyebrow">Update available</p>}
       <h2 id="update-title">LightHouse {info.latest}</h2>
       {phase === 'offer' && <p>You have {info.current}. {info.installable
         ? 'LightHouse can download and install it for you; your alerts, accounts and settings are kept.'
         : 'Download the new installer and run it; your alerts, accounts and settings are kept.'}</p>}
-      {busy && <div className="update-step"><WaveMark label={null} /><p role="status">{UPDATE_STEP[phase]}</p></div>}
-      {phase === 'slow' && <p role="status">{UPDATE_STEP[phase]}</p>}
+      {(busy || phase === 'slow') && <p role="status">{UPDATE_STEP[phase]}</p>}
       {phase === 'failed' && <p role="status">{error}</p>}
       {!busy && <div className="row-end">
         <button className="btn quiet" type="button" onClick={() => dialog.current?.close()}>Later</button>

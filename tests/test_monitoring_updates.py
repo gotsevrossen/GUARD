@@ -36,6 +36,9 @@ class FakeServices:
         self.calls.append(("start", name))
         self.states[name] = "running"
 
+    def request_stop(self, name):
+        self.calls.append(("request-stop", name))
+
 
 def test_pause_stops_and_disables_then_resume_restores_in_order():
     services = FakeServices()
@@ -271,3 +274,52 @@ def test_an_update_that_did_not_take_is_not_offered_again(installed, monkeypatch
     monkeypatch.setattr(updates, "installed_version", lambda: "9.0.0")
     asyncio.run(updates.check(release_with_assets(), now=4.0e9))
     assert not (installed / "data" / "config" / "update-attempt.json").exists()
+
+
+def test_shut_down_stops_everything_and_opening_again_restores_it(tmp_path):
+    services, marker = FakeServices(), tmp_path / "config" / "shutdown.json"
+    monitoring.shutdown(services, marker)
+    assert services.calls == [("manual", "LightHouse-Ingestion"), ("stop", "LightHouse-Ingestion"),
+                              ("manual", "LightHouse-Suricata"), ("stop", "LightHouse-Suricata"),
+                              ("manual", "LightHouse-API")]
+    assert marker.is_file()
+    services.calls.clear()
+    # The launcher starts the API; the API puts back what was running.
+    assert monitoring.restore_after_shutdown(services, marker) is True
+    assert services.calls == [("auto", "LightHouse-API"), ("auto", "LightHouse-Suricata"), ("start", "LightHouse-Suricata"),
+                              ("auto", "LightHouse-Ingestion"), ("start", "LightHouse-Ingestion")]
+    assert not marker.exists()
+    assert monitoring.restore_after_shutdown(services, marker) is False, "a normal start changes nothing"
+
+
+def test_shut_down_while_paused_comes_back_paused(tmp_path):
+    services, marker = FakeServices(state="stopped"), tmp_path / "shutdown.json"
+    monitoring.shutdown(services, marker)
+    services.calls.clear()
+    monitoring.restore_after_shutdown(services, marker)
+    assert services.calls == [("auto", "LightHouse-API")]
+
+
+def test_a_failed_shut_down_puts_things_back(tmp_path):
+    services, marker = FakeServices(fail=True), tmp_path / "shutdown.json"
+    with pytest.raises(OSError):
+        monitoring.shutdown(services, marker)
+    assert ("auto", "LightHouse-API") in services.calls and not marker.exists()
+
+
+def test_only_admins_shut_down_and_the_api_stops_itself_last(api, tmp_path, monkeypatch):
+    services = FakeServices()
+    monkeypatch.setattr(api, "_services", services)
+    monkeypatch.setattr(api, "_shutdown_marker", lambda: tmp_path / "shutdown.json")
+    monkeypatch.setattr(api, "SHUTDOWN_STOP_DELAY_SECONDS", 0)
+    monkeypatch.setattr(api, "_local_chat_model", object())
+    client = TestClient(api.app)
+    owner, admin = headers(api, client, "owner1", "owner"), headers(api, client, "boss", "admin")
+    assert client.post("/api/shutdown", headers=owner).status_code == 403
+    assert services.calls == []
+    assert client.post("/api/shutdown", headers=admin).status_code == 202
+    assert services.calls[-1] == ("request-stop", "LightHouse-API")
+    assert api._local_chat_model is None, "the chat AI is let go at once"
+    # A hand-started copy cannot shut the installed services down.
+    monkeypatch.setattr(api, "_shutdown_marker", lambda: None)
+    assert client.post("/api/shutdown", headers=admin).status_code == 403

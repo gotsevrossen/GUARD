@@ -9,11 +9,12 @@ import platform
 import sys
 import shutil
 import sqlite3
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -101,6 +102,27 @@ async def _preload_chat() -> None:
         logger.warning("Chat preload failed; the first question will load the model instead", exc_info=True)
 
 
+def _shutdown_marker() -> Path | None:
+    """`<install>\\data\\config\\shutdown.json`; None outside the installed service."""
+    from .updates import install_dir
+    install = install_dir()
+    return install / "data" / "config" / "shutdown.json" if install else None
+
+
+async def _restore_after_shutdown() -> None:
+    """Opened again after a shut down: back to automatic start, and monitoring
+    resumes if it was running. Never raises."""
+    try:
+        marker = _shutdown_marker()
+        if marker is not None and _services is not None:
+            from .monitoring import restore_after_shutdown
+            await asyncio.to_thread(restore_after_shutdown, _services, marker)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("Could not restore LightHouse after a shut down; use Resume monitoring")
+
+
 UPDATE_CLEANUP_DELAY_SECONDS = 10 * 60
 
 
@@ -125,7 +147,8 @@ async def lifespan(app: FastAPI):
     and its own systemd unit, so nothing starts here for it.
     """
     task = asyncio.create_task(_ingestion_task(), name="ingestion") if is_desktop() else None
-    background = [asyncio.create_task(_preload_chat(), name="chat-preload"),
+    background = [asyncio.create_task(_restore_after_shutdown(), name="restore-after-shutdown"),
+                  asyncio.create_task(_preload_chat(), name="chat-preload"),
                   asyncio.create_task(_cleanup_after_update(), name="update-cleanup")] \
         if sys.platform == "win32" else []
     try:
@@ -421,6 +444,44 @@ def change_monitoring(body: MonitoringChange, user=Depends(require("admin"))) ->
         raise HTTPException(502, "Windows could not change the LightHouse services. Try again, or restart the computer.")
     logger.warning("Monitoring %s by %s", "paused" if body.paused else "resumed", user["username"])
     return status(_services)
+
+
+SHUTDOWN_STOP_DELAY_SECONDS = 1.5
+
+
+def _stop_api_soon() -> None:
+    """Runs after the shut-down reply is sent. Stopping our own service ends this
+    process, so it is the very last thing done."""
+    time.sleep(SHUTDOWN_STOP_DELAY_SECONDS)
+    from .monitoring import API_SERVICE
+    try:
+        _services.request_stop(API_SERVICE)
+    except Exception:
+        logger.exception("Could not stop the LightHouse-API service")
+
+
+@app.post("/api/shutdown", status_code=202)
+def shut_down(background: BackgroundTasks, user=Depends(require("admin"))) -> dict:
+    """Shut LightHouse down: monitoring, the local AI and this service, until someone
+    opens LightHouse again (see triage/monitoring.py). Admin only, like pausing."""
+    global _chat_model, _local_chat_model
+    from .monitoring import shutdown, status
+    marker = _shutdown_marker()
+    if marker is None or not status(_services)["available"]:
+        raise HTTPException(403, "Only the installed LightHouse app can shut down. "
+                                 "This copy is not running as the LightHouse service.")
+    try:
+        shutdown(_services, marker)
+    except PermissionError:
+        raise HTTPException(403, "Only the installed LightHouse app can shut down. "
+                                 "This copy is not running as the LightHouse service.")
+    except Exception:
+        logger.exception("Could not shut down")
+        raise HTTPException(502, "Windows could not stop the LightHouse services. Try again, or restart the computer.")
+    _chat_model = _local_chat_model = None  # free the chat AI now; the process ends shortly
+    logger.warning("Shut down by %s", user["username"])
+    background.add_task(_stop_api_soon)
+    return {"ok": True}
 
 
 @app.get("/api/updates")

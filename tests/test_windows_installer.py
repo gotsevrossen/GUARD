@@ -66,16 +66,77 @@ def test_moved_install_repoints_services_and_cleans_up_only_lighthouse_folders()
     assert "$config.SuricataDir -in @('C:\\Suricata', \"$env:SystemDrive\\Suricata\")" in install
 
 
-def test_dashboard_opens_in_its_own_window():
-    """Shortcuts open Edge in app mode, with a browser fallback, never both."""
+def test_dashboard_shortcuts_use_the_launcher():
+    """Both shortcuts run open-lighthouse.ps1, so they also restart LightHouse after a shut down."""
     iss = (WINDOWS / 'lighthouse.iss').read_text(encoding='utf-8')
-    icons = [line for line in iss.splitlines() if line.startswith('Name: ') and 'Dashboard' in line]
-    app_mode = [line for line in icons if 'Parameters: "--app=http://127.0.0.1:8000"' in line]
-    fallback = [line for line in icons if 'Filename: "http://127.0.0.1:8000"' in line]
-    assert len(app_mode) == 2 and all('Check: HasEdge' in line for line in app_mode)
-    assert len(fallback) == 2 and all('Check: not HasEdge' in line for line in fallback)
+    icons = iss[iss.index('[Icons]'):iss.index('[Run]')]
+    dashboard = [line for line in icons.splitlines() if line.startswith('Name: ') and 'Dashboard' in line]
+    assert len(dashboard) == 2
+    assert dashboard[0].startswith('Name: "{group}\\LightHouse Dashboard"')
+    assert dashboard[1].startswith('Name: "{autodesktop}\\LightHouse Dashboard"') and 'Tasks: desktopicon' in dashboard[1]
+    for line in dashboard:
+        assert 'Filename: "{sys}\\WindowsPowerShell\\v1.0\\powershell.exe"' in line
+        assert ('Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File '
+                '""{app}\\setup\\open-lighthouse.ps1"""') in line
+        assert 'IconFilename: "{app}\\lighthouse.ico"' in line
+    # No Edge-only or browser-only shortcut is left that would skip the restart.
+    assert 'EdgePath' not in icons and 'HasEdge' not in icons and 'Filename: "http://' not in icons
+    assert 'Name: "{group}\\LightHouse Logs"' in icons
+    # The finish page still opens the dashboard directly; the services run by then.
     assert 'Check: SetupSucceeded and HasEdge' in iss and 'Check: SetupSucceeded and not HasEdge' in iss
     assert 'function FindEdge' in iss
+    assert 'Source: "open-lighthouse.ps1"; DestDir: "{app}\\setup"' in iss[iss.index('[Files]'):iss.index('[Icons]')]
+
+
+def test_launcher_starts_only_the_api_and_opens_the_dashboard():
+    launcher = (WINDOWS / 'open-lighthouse.ps1').read_text(encoding='utf-8')
+    code = '\n'.join(line for line in launcher.splitlines() if not line.lstrip().startswith('#'))
+    # The API resumes ingestion and Suricata itself, as SYSTEM.
+    assert "Start-Service 'LightHouse-API'" in code
+    assert 'LightHouse-Ingestion' not in code and 'LightHouse-Suricata' not in code
+    assert code.count('Start-Service') == 1 and 'Stop-Service' not in code
+    assert "$dashboard = 'http://127.0.0.1:8000'" in code
+    assert '"$dashboard/health"' in code and '-UseBasicParsing' in code and '-TimeoutSec' in code
+    assert '"--app=$dashboard"' in code and 'Start-Process $dashboard' in code
+    assert "'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\msedge.exe'" in code
+    # A failed start explains itself instead of opening a dead page.
+    failure = code[code.index('if (!$ready) {\n    Add-Type'):]
+    assert '[System.Windows.MessageBox]::Show(' in failure
+    assert failure.index('exit 1') < failure.index('Start-Process')
+
+
+def test_users_may_start_the_api_but_not_stop_it():
+    """Interactive users get start/query rights on LightHouse-API only, never stop or config."""
+    import re
+    install = (WINDOWS / 'install.ps1').read_text(encoding='utf-8')
+    assert re.findall(r'\(A;[^)]*\)', install) == ['(A;;RPLCLORC;;;IU)']
+    assert "Grant-InteractiveStart 'LightHouse-API'" in install
+    assert install.count('Grant-InteractiveStart') == 2  # definition + one call
+    grant = install[install.index('function Grant-InteractiveStart'):install.index('function Wait-Http')]
+    assert '& sc.exe sdshow $Name' in grant and '& sc.exe sdset $Name' in grant
+    assert grant.count('$LASTEXITCODE -ne 0') == 2 and grant.count('throw') >= 3
+    # Added once, inside the DACL, before any SACL.
+    assert '$sddl.Contains($ace)' in grant and "IndexOf('S:', $dacl)" in grant
+    body = install[install.index("Register 'LightHouse-API'"):]
+    assert body.index("Grant-InteractiveStart 'LightHouse-API'") < body.index('Start-Service LightHouse-API')
+
+
+def test_setup_clears_a_stale_shutdown_marker_before_starting_services():
+    install = (WINDOWS / 'install.ps1').read_text(encoding='utf-8')
+    marker = install.index('$shutdownMarker = "$DataDir\\config\\shutdown.json"')
+    assert 'Remove-Item -LiteralPath $shutdownMarker -Force' in install
+    assert marker < install.index("Register 'LightHouse-Suricata'") < install.index('Start-Service LightHouse-Suricata')
+
+
+def test_touched_scripts_parse():
+    if sys.platform != 'win32':
+        pytest.skip('PowerShell parser')
+    for name in ('install.ps1', 'open-lighthouse.ps1'):
+        command = ("$e=$null;[System.Management.Automation.Language.Parser]::ParseFile("
+                   f"'{WINDOWS / name}',[ref]$null,[ref]$e)|Out-Null;$e.Count")
+        result = subprocess.run(['powershell.exe', '-NoProfile', '-Command', command],
+                                capture_output=True, text=True, timeout=60)
+        assert result.stdout.strip() == '0', name + result.stdout + result.stderr
 
 
 def test_web_app_manifest_is_installable_and_cache_free():

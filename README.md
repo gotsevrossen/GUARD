@@ -35,7 +35,9 @@ LightHouse is a Windows application. The older Linux build is no longer maintain
 6. Wait. Setup installs the sensors and downloads the AI model, which can take a while on a slow connection.
 7. On the last page, leave **Open the LightHouse dashboard** ticked and click **Finish**.
 
-LightHouse runs in the background and starts with Windows, so there is nothing to launch. To open the dashboard again, use the **LightHouse Dashboard** shortcut on the desktop or in the Start menu. It opens in its own window, with no address bar or tabs and its own taskbar icon, like an app. To keep it on the taskbar, right-click its icon there and choose **Pin to taskbar**. You can also go to `http://127.0.0.1:8000` in any browser.
+LightHouse runs in the background and starts with Windows, so there is nothing to launch. To open the dashboard again, use the **LightHouse Dashboard** shortcut on the desktop or in the Start menu. It opens in its own window, with no address bar or tabs and its own taskbar icon, like an app. To keep it on the taskbar, right-click **LightHouse Dashboard** in the Start menu and choose **Pin to taskbar**. Don't pin the open window itself: that pin skips the shortcut, so it can't start LightHouse again after a shut down. You can also go to `http://127.0.0.1:8000` in any browser.
+
+**Shutting down:** admins can choose **Shut down** on the Home page. Monitoring, the local AI and the dashboard stop, and stay off after a restart. Windows' own event logging and Sysmon keep recording, so LightHouse catches up on what happened when it starts again. To start it, open **LightHouse Dashboard** from the Start menu or desktop. No admin rights are needed, and monitoring comes back on if it was running before.
 
 The window is Microsoft Edge in app mode, so you sign in once there; chats are saved per browser. If Edge has been removed, the shortcuts open your default browser instead.
 

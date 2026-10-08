@@ -41,7 +41,17 @@ try {
         & winget install --id JRSoftware.InnoSetup --exact --source winget --silent --scope user --accept-source-agreements --accept-package-agreements; Check-Exit
         $compiler = "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
     }
-    & $compiler /Qp "/DPayloadDir=$stage" "$PSScriptRoot\lighthouse.iss"; Check-Exit
+    # Antivirus scanning the new .exe while Inno writes its resources makes the last
+    # step fail now and then ("EndUpdateResource failed (110)"). Start from no old
+    # output and retry a couple of times before giving up.
+    Remove-Item "$repo\dist\LightHouse-Setup.exe", "$repo\dist\LightHouse-Setup.exe.sha256" -Force -ErrorAction SilentlyContinue
+    for ($attempt = 1; ; $attempt++) {
+        & $compiler /Qp "/DPayloadDir=$stage" "$PSScriptRoot\lighthouse.iss"
+        if ($LASTEXITCODE -eq 0) { break }
+        if ($attempt -ge 3) { Check-Exit }
+        Write-Warning "Installer compile failed (attempt $attempt of 3), often antivirus holding the file; retrying in 10 seconds."
+        Start-Sleep -Seconds 10
+    }
     # Attach both files to the GitHub release: the dashboard's "Update now" installs
     # only an installer whose SHA-256 matches this file (triage/updates.py).
     $hash = Get-FileHash "$repo\dist\LightHouse-Setup.exe" -Algorithm SHA256

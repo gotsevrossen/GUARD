@@ -1,4 +1,4 @@
-"""Pause and resume LightHouse's background monitoring.
+"""Pause and resume LightHouse's background monitoring, or shut it all down.
 
 For a laptop that leaves the office: pausing stops the services that capture and
 triage (Suricata and ingestion, the CPU- and memory-heavy ones) and switches them
@@ -9,8 +9,10 @@ exactly what an intruder would want.
 """
 from __future__ import annotations
 
+import json
 import logging
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
+from pathlib import Path
 from typing import Iterator, Protocol
 
 logger = logging.getLogger(__name__)
@@ -23,6 +25,7 @@ class Services(Protocol):
     def state(self, name: str) -> str | None: ...        # running/stopped/starting/stopping/other, None if missing
     def set_automatic(self, name: str, automatic: bool) -> None: ...
     def stop(self, name: str) -> None: ...
+    def request_stop(self, name: str) -> None: ...        # ask, don't wait (used to stop the API itself)
     def start(self, name: str) -> None: ...
 
 
@@ -86,6 +89,11 @@ class WindowsServices:
                     raise
         win32serviceutil.WaitForServiceStatus(name, win32service.SERVICE_STOPPED, 60)
 
+    def request_stop(self, name: str) -> None:
+        import win32serviceutil
+        with _access_checked():
+            win32serviceutil.StopService(name)
+
     def start(self, name: str) -> None:
         import pywintypes
         import win32serviceutil
@@ -119,3 +127,47 @@ def resume(services: Services) -> None:
         services.set_automatic(name, True)
         services.start(name)
     logger.warning("Monitoring resumed by an administrator")
+
+
+# Shut down: everything LightHouse runs goes off, the API (and the chat AI it holds)
+# included, and stays off after a restart until someone opens LightHouse again. The
+# shortcut's launcher may start the API without admin rights (install.ps1 grants
+# only that); the API then reads the marker, as SYSTEM, and puts back what was
+# running. Windows' own logging, Sysmon (it writes into the event log, so LightHouse
+# catches up on its return) and the Npcap driver are left alone.
+API_SERVICE = "LightHouse-API"
+
+
+def shutdown(services: Services, marker: Path) -> None:
+    """Stop monitoring and set every LightHouse service to manual start. The caller
+    stops the API itself last, once its reply has been sent."""
+    resume_monitoring = not status(services)["paused"]
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps({"resume_monitoring": resume_monitoring}), encoding="utf-8")
+    try:
+        for name in MONITORING_SERVICES:
+            services.set_automatic(name, False)
+            services.stop(name)
+        services.set_automatic(API_SERVICE, False)
+    except Exception:
+        # Half shut down helps nobody: put back what was running, then report.
+        with suppress(Exception):
+            restore_after_shutdown(services, marker)
+        raise
+    logger.warning("LightHouse shut down by an administrator")
+
+
+def restore_after_shutdown(services: Services, marker: Path) -> bool:
+    """On API start: undo a shut down, if there was one. True when there was."""
+    if not marker.is_file():
+        return False
+    try:
+        resume_monitoring = json.loads(marker.read_text(encoding="utf-8")).get("resume_monitoring") is True
+    except (OSError, ValueError, AttributeError):
+        resume_monitoring = True  # unreadable: err on the side of monitoring
+    services.set_automatic(API_SERVICE, True)
+    if resume_monitoring:
+        resume(services)
+    marker.unlink(missing_ok=True)
+    logger.warning("LightHouse started again after a shut down%s", "" if resume_monitoring else " (monitoring stays paused)")
+    return True

@@ -1,4 +1,4 @@
-﻿#define AppVersion "0.3.1"
+﻿#define AppVersion "0.3.2"
 #ifndef PayloadDir
   #error Build with packaging/windows/build.ps1 to supply the bundled Python runtime and dashboard.
 #endif
@@ -53,14 +53,13 @@ Source: "dependency-hashes.json"; DestDir: "{app}\setup"; Flags: ignoreversion
 Source: "configure_suricata.py"; DestDir: "{app}\setup"; Flags: ignoreversion
 Source: "disable_failed_rules.py"; DestDir: "{app}\setup"; Flags: ignoreversion
 Source: "uninstall.ps1"; DestDir: "{app}\setup"; Flags: ignoreversion
+Source: "open-lighthouse.ps1"; DestDir: "{app}\setup"; Flags: ignoreversion
 [Icons]
-; LightHouse opens in its own window (Edge app mode: no address bar or tabs, its own
-; taskbar entry), like a home-screen web app. Edge ships with Windows; where it has
-; been removed, the same shortcuts open the default browser instead.
-Name: "{group}\LightHouse Dashboard"; Filename: "{code:EdgePath}"; Parameters: "--app=http://127.0.0.1:8000"; IconFilename: "{app}\lighthouse.ico"; Comment: "Open the LightHouse dashboard"; Check: HasEdge
-Name: "{group}\LightHouse Dashboard"; Filename: "http://127.0.0.1:8000"; IconFilename: "{app}\lighthouse.ico"; Check: not HasEdge
-Name: "{autodesktop}\LightHouse Dashboard"; Filename: "{code:EdgePath}"; Parameters: "--app=http://127.0.0.1:8000"; IconFilename: "{app}\lighthouse.ico"; Comment: "Open the LightHouse dashboard"; Tasks: desktopicon; Check: HasEdge
-Name: "{autodesktop}\LightHouse Dashboard"; Filename: "http://127.0.0.1:8000"; IconFilename: "{app}\lighthouse.ico"; Tasks: desktopicon; Check: not HasEdge
+; The shortcuts run open-lighthouse.ps1, which starts LightHouse again after an admin
+; shut it down from the dashboard (no admin rights needed), then opens the dashboard
+; in its own window (Edge app mode), or the default browser where Edge was removed.
+Name: "{group}\LightHouse Dashboard"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\setup\open-lighthouse.ps1"""; IconFilename: "{app}\lighthouse.ico"; Comment: "Open the LightHouse dashboard"; Flags: runminimized
+Name: "{autodesktop}\LightHouse Dashboard"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\setup\open-lighthouse.ps1"""; IconFilename: "{app}\lighthouse.ico"; Comment: "Open the LightHouse dashboard"; Tasks: desktopicon; Flags: runminimized
 Name: "{group}\LightHouse Logs"; Filename: "{app}\data\logs"
 [Run]
 ; Offered only when dependency setup succeeded; postinstall entries run as the

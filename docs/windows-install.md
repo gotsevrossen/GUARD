@@ -108,6 +108,8 @@ rotating stdout/stderr logs under the data directory:
 
 There is no separate AI service: the ingestion service runs the model in-process.
 The API/dashboard is at http://127.0.0.1:8000.
+The LightHouse Dashboard shortcuts run `<app>\setup\open-lighthouse.ps1`: if an admin used "Shut down", it starts LightHouse-API (which resumes monitoring itself), waits for `/health`, then opens the dashboard.
+Setup lets interactive users start and query LightHouse-API only (`(A;;RPLCLORC;;;IU)` via `sc.exe sdset`); stopping or reconfiguring any service stays admin-only.
 NSSM's service environment supplies all application settings; no user PATH or
 shell activation is required. No inbound firewall rule is added.
 

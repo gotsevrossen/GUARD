@@ -143,6 +143,26 @@ function Register([string]$Name, [string]$Exe, [string]$Arguments, [string[]]$En
     Nssm @('set', $Name, 'AppRotateBytes', '10485760')
     Nssm (@('set', $Name, 'AppEnvironmentExtra') + $Environment)
 }
+function Grant-InteractiveStart([string]$Name) {
+    # After an admin chooses "Shut down" in the dashboard, the owner restarts
+    # LightHouse from its shortcut without admin rights. Interactive users get start,
+    # query status, interrogate and read (RPLCLORC) on this one service; starting it is
+    # harmless (Windows does the same at every boot). Stopping it and changing its
+    # configuration or permissions stay with Administrators and SYSTEM.
+    $ace = '(A;;RPLCLORC;;;IU)'
+    $output = & sc.exe sdshow $Name
+    if ($LASTEXITCODE -ne 0) { throw "Could not read the permissions of service $Name (sc.exe $LASTEXITCODE)" }
+    $sddl = (@($output) | Where-Object { $_ -and $_.Trim() } | Select-Object -First 1)
+    $dacl = if ($sddl) { $sddl.Trim().IndexOf('D:') } else { -1 }
+    if ($dacl -lt 0) { throw "Service $Name has no readable permission list: $sddl" }
+    $sddl = $sddl.Trim()
+    if ($sddl.Contains($ace)) { return }
+    # The new entry goes at the end of the DACL, before any SACL (S:).
+    $end = $sddl.IndexOf('S:', $dacl)
+    if ($end -lt 0) { $end = $sddl.Length }
+    & sc.exe sdset $Name $sddl.Insert($end, $ace) | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Could not let users start service $Name (sc.exe $LASTEXITCODE)" }
+}
 function Wait-Http([string]$Url) {
     for ($attempt = 0; $attempt -lt 90; $attempt++) {
         try { return Invoke-RestMethod $Url -TimeoutSec 2 } catch { Start-Sleep -Seconds 2 }
@@ -291,6 +311,12 @@ try {
     & $python "$AppDir\setup\configure_suricata.py" $vendorYaml.FullName "$DataDir\config\suricata.yaml" $configPath $DataDir $rules
     if ($LASTEXITCODE -ne 0) { throw 'Invalid Suricata configuration.' }
     Test-Suricata $suricataExe.FullName $python
+    # A "Shut down" from the dashboard leaves this marker for the API's next start.
+    # Setup re-registers every service as automatic and starts them all itself, so an
+    # old marker would only be acted on again later. Removed only here, just before
+    # the services are re-registered: if setup fails earlier, the API still finds it.
+    $shutdownMarker = "$DataDir\config\shutdown.json"
+    if (Test-Path -LiteralPath $shutdownMarker) { Remove-Item -LiteralPath $shutdownMarker -Force }
     Register 'LightHouse-Suricata' $suricataExe.FullName "-c `"$DataDir\config\suricata.yaml`" -i `"$($config.CaptureInterface)`" -l `"$DataDir\suricata`"" @("PATH=$env:PATH;$env:WINDIR\System32\Npcap")
     Nssm @('set', 'LightHouse-Suricata', 'DependOnService', 'npcap')
     Start-Service LightHouse-Suricata
@@ -305,6 +331,7 @@ try {
     # Optional "ModelThreads" in windows.json overrides the automatic choice.
     if ($config.ModelThreads -and [int]$config.ModelThreads -gt 0) { $environment += "LIGHTHOUSE_MODEL_THREADS=$([int]$config.ModelThreads)" }
     Register 'LightHouse-API' $python "-m uvicorn triage.api:app --host 127.0.0.1 --port $($config.ApiPort)" $environment
+    Grant-InteractiveStart 'LightHouse-API'
     Start-Service LightHouse-API
     # API seeds first, placing the existing credential banner in API stdout.
     Wait-Http "http://127.0.0.1:$($config.ApiPort)/api/health" | Out-Null
