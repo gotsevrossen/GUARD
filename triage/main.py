@@ -35,6 +35,10 @@ def build_model(mock: bool) -> TriageModel:
 def build_service(mock: bool) -> TriageService:
     service = TriageService(Database(default_db_path()), build_model(mock))
     service.db.initialize()
+    # The admin's "About this business" note, saved by the API process into the same
+    # database, read per alert (see TriageModel.triage_system_prompt). The answer
+    # style note is chat-only and deliberately not wired here.
+    service.model.business_context = lambda: service.db.ai_instructions()["business"]
     return service
 
 

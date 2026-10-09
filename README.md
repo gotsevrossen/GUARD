@@ -143,13 +143,24 @@ Then choose the model on the **Admin** page, under **Chat AI**. The choices are 
 
 Create the key in GenAI Studio under your avatar → **Settings → Account → API Keys**. LightHouse stores it encrypted with Windows' own data protection, in its admin-only data folder, so a copy taken to another computer is useless. It's only ever sent to `genai.rcac.purdue.edu`, over HTTPS, and is never shown, logged or put in the dashboard. To check whether it's set, use `cloud_key status`. To turn it off, use `cloud_key clear`, then restart the service. If you think the key leaked, delete it in GenAI Studio and create a new one. GenAI Studio is for Purdue students, faculty and staff, and the key is tied to your account, so never put it in an installer or share it.
 
+### AI instructions (Admin page)
+
+Admins can tell the AI about the business on the **Admin** page, under **AI instructions**. There are two boxes, each up to 1,000 characters:
+
+- **About this business**, for example "5-person dental office; the front-desk PC holds patient records; our IT provider is Acme IT, 555-0100". Both chat answers and alert triage use it.
+- **How to answer**, for example "use bullet points; end with who to call". Only chat uses it. Alert triage keeps its fixed format.
+
+A change applies from the next question or the next alert, with no restart needed. LightHouse's built-in safety rules always come first and win. The AI is told to ignore anything in these notes that conflicts with them, the notes never lower an alert's severity, and the fixed "get help" reminders still appear. Keep the notes short: the local AI rereads them before every first answer, so long notes make it slower to start. If chat uses Purdue GenAI Studio, both notes are sent with each question. Alert triage never leaves this computer.
+
 ### Roles
 
 - **Owner:** plain-English alerts, trends and personal preferences.
 - **Analyst:** everything an owner sees, plus technical evidence and health views.
-- **Admin:** everything an analyst sees, plus user management.
+- **Admin:** everything an analyst sees, plus user management and the AI instructions.
 
 Roles are enforced by the server. Hiding a tab in the dashboard is presentation, not access control.
+
+**Forgot a password?** It can't be shown, only replaced. In **PowerShell as administrator**, run `& "$app\runtime\python.exe" -m triage.reset_password` (`$app` as above). It prints a new password for `admin`, or for the account you name after it, and asks for a new one at the next sign-in.
 
 ---
 

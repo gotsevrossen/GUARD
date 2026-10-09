@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import StrEnum
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
@@ -284,3 +285,41 @@ class ChatTitle(BaseModel):
     # None when the model is unavailable or its title failed validation; the
     # dashboard keeps its own fallback title.
     title: str | None
+
+
+# Admin page "AI instructions": free text the business's administrator writes for
+# the AI. Capped so the notes cannot crowd the alert context and the question out of
+# the local model's 4,096-token window, and because every character is re-read
+# before each first answer on a slow CPU.
+AI_INSTRUCTIONS_MAX_CHARS = 1000
+# Everything below a space except newline and tab, plus DEL and the C1 range. They
+# have no meaning in a note and could hide text from the admin reading it back.
+_NOTE_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def normalize_note(value: str) -> str:
+    """One canonical form for an admin note, used both when it is saved and when it
+    is read back for a prompt (the database is not trusted to hold a clean value)."""
+    value = value.replace("\r\n", "\n").replace("\r", "\n")
+    return _NOTE_CONTROL_CHARS.sub("", value).strip()
+
+
+class AIInstructions(BaseModel):
+    """What PUT /api/admin/ai-instructions accepts. An empty string means "not set".
+
+    The length limit applies after normalization, so trailing blank lines or stray
+    control characters never push a note over it.
+    """
+    business: str = Field(max_length=AI_INSTRUCTIONS_MAX_CHARS)
+    style: str = Field(max_length=AI_INSTRUCTIONS_MAX_CHARS)
+
+    @field_validator("business", "style", mode="before")
+    @classmethod
+    def normalized(cls, value: Any) -> Any:
+        # Non-strings fall through to the type check and are rejected there.
+        return normalize_note(value) if isinstance(value, str) else value
+
+
+class AIInstructionsView(AIInstructions):
+    """GET and PUT reply: the saved values plus the limit the dashboard enforces."""
+    max_chars: int = AI_INSTRUCTIONS_MAX_CHARS

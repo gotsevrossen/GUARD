@@ -1,7 +1,8 @@
 """Chat answers from Purdue GenAI Studio, with the local model as the fallback.
 
 Opt-in: used only when an API key is stored (triage.cloud_key). Only chat goes
-out, carrying the same owner-safe, fenced alert context as local chat; alert
+out, carrying the same owner-safe, fenced alert context as local chat and the same
+system prompt, including the admin's AI instructions (owner-approved); alert
 triage always stays on this computer (GenAI Studio allows 20 requests a minute
 per user, far below a busy sensor's alert rate). The code-side controls (severity
 floor, fixed reminders) do not depend on which model answers.

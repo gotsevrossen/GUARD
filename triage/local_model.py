@@ -242,19 +242,23 @@ def parse_reply(content: str) -> TriageResult:
 
 
 def run_triage(llama: Any, alert: NormalizedAlert, settings: LlamaCppSettings,
-               constrained: bool) -> TriageResult:
+               constrained: bool, system: str = SYSTEM_PROMPT) -> TriageResult:
     """One generation, validated. Raises on any failure.
 
     constrained=True forces schema-shaped JSON with a grammar. It is exact but, in
     llama-cpp-python, applied to the whole vocabulary before top-k: about three
     times slower per alert with Phi-4-mini's 200k-token vocabulary. So it is the
     retry path, not the first attempt.
+
+    `system` is TriageModel.triage_system_prompt(): SYSTEM_PROMPT, plus the admin's
+    business note when there is one. The alert itself stays in the user turn,
+    fenced by build_prompt.
     """
     options: dict[str, Any] = {}
     if constrained:
         options["response_format"] = {"type": "json_object", "schema": TRIAGE_JSON_SCHEMA}
     response = llama.create_chat_completion(
-        messages=[{"role": "system", "content": SYSTEM_PROMPT},
+        messages=[{"role": "system", "content": system},
                   {"role": "user", "content": build_prompt(alert)}],
         temperature=0.1,
         max_tokens=settings.max_tokens,
@@ -286,10 +290,12 @@ class LlamaCppTriageModel(TriageModel):
         async with self._lock:
             if not await self._ensure_loaded():
                 return unavailable_result(f"Local AI model unavailable: {self._load_error}")
+            # Read once per alert, so both attempts see the same instructions.
+            system = self.triage_system_prompt()
             last_error: Exception | None = None
             for attempt, constrained in enumerate(self.ATTEMPTS):
                 try:
-                    result = await asyncio.to_thread(self._infer_blocking, alert, constrained)
+                    result = await asyncio.to_thread(self._infer_blocking, alert, constrained, system)
                     # A reply that only validated under the grammar is a weaker
                     # signal; the confidence cap reads this flag.
                     return result.with_runtime_flags(retried=attempt > 0)
@@ -323,9 +329,9 @@ class LlamaCppTriageModel(TriageModel):
             if self._llama is None:
                 self._llama = self._loader(self.settings)
 
-    def _infer_blocking(self, alert: NormalizedAlert, constrained: bool) -> TriageResult:
+    def _infer_blocking(self, alert: NormalizedAlert, constrained: bool, system: str = SYSTEM_PROMPT) -> TriageResult:
         with self._thread_lock:
-            return run_triage(self._llama, alert, self.settings, constrained)
+            return run_triage(self._llama, alert, self.settings, constrained, system)
 
     async def chat(self, system: str, messages: list[dict[str, str]], *,
                    max_tokens: int, temperature: float) -> str | None:

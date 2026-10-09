@@ -12,12 +12,15 @@ aside{height:100vh;display:flex;flex-direction:column;
 aside::-webkit-scrollbar{display:none}
 /* the toggle wears a nav item's shape, size and hover, and its glyph sits on the
    same centre line as the nav icons, so it reads as part of that column */
-.rail-top{display:flex;justify-content:flex-start;padding-left:3px;margin-bottom:4px}
-.collapse{display:grid;place-items:center;width:44px;height:44px;border:0;
+.rail-top{display:flex;justify-content:flex-start;gap:4px;padding-left:3px;margin-bottom:4px}
+/* new chat, pause and shut down sit beside the toggle in exactly its shape, so the
+   row reads as one strip of rail controls */
+.collapse,.rail-btn{display:grid;place-items:center;width:44px;height:44px;padding:0;border:0;
   border-radius:var(--r-sm);background:transparent;color:#d8f3e9;
   font-size:1.05rem;font-weight:700;line-height:1;cursor:pointer;
   transition:background .15s ease,color .15s ease}
-.collapse:hover{background:rgba(255,255,255,.14);color:#fff}
+.collapse:hover,.rail-btn:hover:not(:disabled){background:rgba(255,255,255,.14);color:#fff}
+.rail-btn:disabled{opacity:.6;cursor:default}
 .brand{display:flex;align-items:center;gap:13px;padding:0 4px 28px}
 .brand img{flex:0 0 auto;width:64px;height:64px;border-radius:50%;background:#fff;
   object-fit:cover;transition:width .18s ease,height .18s ease}
@@ -39,9 +42,6 @@ nav button.active{background:#fff;color:var(--green-deep);font-weight:600}
 .chats{margin:22px 0 4px;padding-top:18px;border-top:1px solid rgba(255,255,255,.28)}
 .chats .head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 10px 6px}
 .chats .head span{font-size:.66rem;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:#bfe3d6}
-.chats .new{width:26px;height:26px;padding:0;border:0;border-radius:9px;background:rgba(255,255,255,.14);
-  color:#eafff6;font:inherit;font-size:1rem;line-height:1;cursor:pointer}
-.chats .new:hover{background:rgba(255,255,255,.26);color:#fff}
 .chats button.chat{display:flex;align-items:center;gap:9px;width:100%;margin:1px 0;padding:9px 10px;border:0;
   border-radius:11px;background:transparent;color:#cdeee2;font:inherit;font-size:.82rem;font-weight:400;
   text-align:left;cursor:pointer;transition:background .15s ease,color .15s ease}

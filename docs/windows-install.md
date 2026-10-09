@@ -97,6 +97,16 @@ configuration, model storage and logs have an Administrators/SYSTEM-only ACL.
 API startup initializes the database before ingestion starts, so the credential
 banner is in the API log. Repair preserves accounts and does not reset passwords.
 
+**Lost password.** Passwords are stored only as bcrypt hashes, so none can be shown.
+From an elevated terminal, give the account a new random password instead (default
+account `admin`; pass a username for another). It is printed once, the account is
+signed out everywhere, and it must choose its own password at next sign-in:
+
+```powershell
+$app = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' | Where-Object DisplayName -like 'LightHouse*').InstallLocation
+& "$app\runtime\python.exe" -m triage.reset_password            # or: ... reset_password owner1
+```
+
 NSSM registers these automatic LocalSystem services, with restart-on-failure and
 rotating stdout/stderr logs under the data directory:
 

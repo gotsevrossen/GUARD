@@ -22,9 +22,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .db import Database, PasswordTooLongError, default_db_path, discard_first_run_password
-from .llm import CHAT_CONTEXT_MAX_ALERTS, TriageModel, answer_chat, stream_chat, suggest_title, warm_chat
+from .llm import (CHAT_CONTEXT_MAX_ALERTS, CHAT_SYSTEM_PROMPT, TriageModel, answer_chat, compose_chat_system_prompt,
+                  stream_chat, suggest_title, warm_chat)
 from .paths import bundle_dir, is_desktop
-from .schema import AlertDetailOwner, AlertStatus, ChatReply, ChatRequest, ChatTitle, ChatTitleRequest
+from .schema import (AI_INSTRUCTIONS_MAX_CHARS, AIInstructions, AIInstructionsView, AlertDetailOwner, AlertStatus,
+                     ChatReply, ChatRequest, ChatTitle, ChatTitleRequest, normalize_note)
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +97,8 @@ async def _preload_chat() -> None:
             return
         model = chat_model()
         if model is not None:
-            await warm_chat(model, await asyncio.to_thread(_chat_alerts, None) or [], focused=False)
+            await warm_chat(model, await asyncio.to_thread(_chat_alerts, None) or [], focused=False,
+                            system=await asyncio.to_thread(_chat_system_prompt))
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -539,6 +542,43 @@ def set_chat_model(body: ChatModelChoice, user=Depends(require("admin"))) -> dic
     return {"ok": True, "current": body.model}
 
 
+@app.get("/api/admin/ai-instructions", response_model=AIInstructionsView)
+def ai_instructions(user=Depends(require("admin"))) -> AIInstructionsView:
+    """The Admin page's "AI instructions". Admin only: the business note shapes
+    every alert's triage, and both notes go into every chat answer."""
+    return _saved_ai_instructions()
+
+
+@app.put("/api/admin/ai-instructions", response_model=AIInstructionsView)
+def set_ai_instructions(body: AIInstructions, user=Depends(require("admin"))) -> AIInstructionsView:
+    """Save both notes. Chat uses them from the next question; the ingestion
+    service from its next alert (it reads them per alert), with no restart."""
+    db.set_ai_instructions(body.business, body.style)
+    logger.warning("AI instructions changed by %s", user["username"])
+    return _saved_ai_instructions()
+
+
+def _saved_ai_instructions() -> AIInstructionsView:
+    # Normalized and capped again on the way out, as the prompts do (llm._admin_note),
+    # so the reply shows what the AI is given and a bad stored value is not a 500.
+    saved = db.ai_instructions()
+    return AIInstructionsView(**{field: normalize_note(saved[field])[:AI_INSTRUCTIONS_MAX_CHARS]
+                                 for field in ("business", "style")})
+
+
+def _chat_system_prompt() -> str:
+    """The chat system prompt with the admin's notes, read per request so a saved
+    change applies to the next question. The same text goes to the local model, its
+    warm-up and GenAI Studio. Never raises: without readable notes, chat still works
+    with the built-in prompt."""
+    try:
+        saved = db.ai_instructions()
+        return compose_chat_system_prompt(saved["business"], saved["style"])
+    except Exception:
+        logger.warning("Could not read the AI instructions; chat uses the built-in prompt", exc_info=True)
+        return CHAT_SYSTEM_PROMPT
+
+
 def _chat_alerts(alert_id: int | None) -> list[AlertDetailOwner] | None:
     """Alert context for a chat, in the owner-safe shape for every role. None when
     the requested alert does not exist.
@@ -568,7 +608,9 @@ async def chat(body: ChatRequest, user=Depends(require(*ALL_ROLES))) -> ChatRepl
     if alerts is None: raise HTTPException(404, "Alert not found")
     # Inference runs in a worker thread inside the model runtime; this await keeps
     # the event loop, and so every other dashboard request, responsive meanwhile.
-    reply, available = await answer_chat(chat_model(), body.messages, alerts, focused=body.alert_id is not None)
+    system = await asyncio.to_thread(_chat_system_prompt)
+    reply, available = await answer_chat(chat_model(), body.messages, alerts, focused=body.alert_id is not None,
+                                         system=system)
     return ChatReply(reply=reply, available=available)
 
 
@@ -583,9 +625,11 @@ async def chat_stream(body: ChatRequest, user=Depends(require(*ALL_ROLES))) -> S
     """
     alerts = await asyncio.to_thread(_chat_alerts, body.alert_id)
     if alerts is None: raise HTTPException(404, "Alert not found")
+    system = await asyncio.to_thread(_chat_system_prompt)
 
     async def events():
-        async for event in stream_chat(chat_model(), body.messages, alerts, focused=body.alert_id is not None):
+        async for event in stream_chat(chat_model(), body.messages, alerts, focused=body.alert_id is not None,
+                                       system=system):
             yield json.dumps(event) + "\n"
 
     # no-store: an answer about this network must not sit in any cache.
@@ -604,7 +648,8 @@ async def chat_warm(body: ChatWarm, user=Depends(require(*ALL_ROLES))) -> dict[s
     while the model is busy."""
     alerts = await asyncio.to_thread(_chat_alerts, body.alert_id)
     if alerts is None: raise HTTPException(404, "Alert not found")
-    return {"warmed": await warm_chat(chat_model(), alerts, focused=body.alert_id is not None)}
+    system = await asyncio.to_thread(_chat_system_prompt)
+    return {"warmed": await warm_chat(chat_model(), alerts, focused=body.alert_id is not None, system=system)}
 
 
 @app.post("/api/chat/title", response_model=ChatTitle)

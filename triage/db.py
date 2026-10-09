@@ -41,6 +41,9 @@ CREATE TABLE IF NOT EXISTS user_settings (user_id INTEGER NOT NULL REFERENCES us
 # rather than truncating, so length is checked here before bcrypt ever sees it.
 MAX_PASSWORD_BYTES = 72
 SESSION_HOURS = 8
+# Keys in the settings table for the Admin page's "AI instructions".
+AI_BUSINESS_KEY = "ai_business_context"
+AI_STYLE_KEY = "ai_answer_style"
 LEGACY_CONFIDENCE_REASONS = json.dumps([{"code": "legacy",
                                          "detail": "Triaged before LightHouse checked AI confidence."}])
 
@@ -375,3 +378,19 @@ class Database:
     def set_user_setting(self, username: str, key: str, value: str) -> None:
         with self.connect() as con:
             con.execute("INSERT INTO user_settings(user_id,key,value) SELECT id,?,? FROM users WHERE username=? ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value", (key, value, username))
+
+    def ai_instructions(self) -> dict[str, str]:
+        """The admin's AI notes as stored, "" for any not set. Read straight from the
+        database on every use: the ingestion service is a separate process from the
+        API that saves them, and this is how a change reaches it without a restart."""
+        with self.connect() as con:
+            rows = {r["key"]: r["value"] for r in con.execute(
+                "SELECT key,value FROM settings WHERE key IN (?,?)", (AI_BUSINESS_KEY, AI_STYLE_KEY))}
+        return {"business": rows.get(AI_BUSINESS_KEY, ""), "style": rows.get(AI_STYLE_KEY, "")}
+
+    def set_ai_instructions(self, business: str, style: str) -> None:
+        """Both notes in one transaction, so triage never sees half an update."""
+        with self.connect() as con:
+            con.executemany("INSERT INTO settings(key,value) VALUES(?,?) "
+                            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                            ((AI_BUSINESS_KEY, business), (AI_STYLE_KEY, style)))

@@ -1,7 +1,7 @@
 import { FormEvent, KeyboardEvent, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { api, Alert, ChatModels, getSession, login, logout, Monitoring, Session, statusOf, UpdateInfo } from './api';
-import { clip, Conversation, loadConversations, MAX_QUESTION, newId, saveConversations, titleFor, toChatMessages, Turn } from './conversations';
+import { api, AiInstructions, Alert, ChatMessage, ChatModels, getSession, login, logout, Monitoring, Session, statusOf, UpdateInfo } from './api';
+import { clip, Conversation, fullTime, loadConversations, MAX_QUESTION, newId, relativeTime, retryTurns, saveConversations, titleFor, toChatMessages, Turn } from './conversations';
 import './styles.css';
 import './sidebar.css';
 
@@ -113,12 +113,26 @@ const Nav = ({ item, tab, setTab }: { item: string; tab: string; setTab: (tab: s
   </button>
 );
 
-function Chats({ chats, activeId, open, start }: { chats: Conversation[]; activeId: string | null; open: (id: string) => void; start: () => void }) {
+/* Small line icons for icon-only buttons. They draw in currentColor, so each button's
+   own colour and hover rules apply; the button carries the accessible name. */
+const ICONS = {
+  copy: 'M9 9h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1V10a1 1 0 0 1 1-1zM5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1',
+  retry: 'M3 12a9 9 0 1 0 2.64-6.36L3 8.3M3 3v5.3h5.3',
+  compose: 'M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.4 2.6a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4z',
+  pause: 'M9 5v14M15 5v14',
+  resume: 'M7 4.5v15l12-7.5z',
+  power: 'M12 3v9M6.34 6.34a8 8 0 1 0 11.32 0',
+};
+const Icon = ({ name, size = 16 }: { name: keyof typeof ICONS; size?: number }) => (
+  <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="2"
+    strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"><path d={ICONS[name]} /></svg>
+);
+
+function Chats({ chats, activeId, open }: { chats: Conversation[]; activeId: string | null; open: (id: string) => void }) {
   return (
     <section className="chats">
       <div className="head">
         <span className="nav-label">Recent chats</span>
-        <button className="new nav-label" type="button" title="New chat" aria-label="New chat" onClick={start}>+</button>
       </div>
       {chats.length
         ? chats.map(chat => (
@@ -311,12 +325,12 @@ function Home({ alerts, canSeeEvidence, act, ask, evidence, monitoring, monitori
    the water bobs, and an arc runs round the rim like a loading ring. Brand greens
    only; static under reduced motion. Each swell spans two periods of the 26-unit
    circle, so sliding it one period loops seamlessly. */
-function WaveMark({ label = 'LightHouse is replying' }: { label?: string | null }) {
+function WaveMark({ label = 'LightHouse is replying', spill = false }: { label?: string | null; spill?: boolean }) {
   const clip = `wave-clip-${useId().replace(/:/g, '')}`;
   // label null: decorative, where text beside it already announces the progress.
-  const a11y = label === null ? { 'aria-hidden': true } : { role: 'status', 'aria-label': label };
+  const a11y = label === null || spill ? { 'aria-hidden': true } : { role: 'status', 'aria-label': label };
   return (
-    <span className="mark wave-mark" {...a11y}>
+    <span className={`mark wave-mark${spill ? ' spill' : ''}`} {...a11y}>
       <svg viewBox="0 0 26 26" aria-hidden="true" focusable="false">
         <defs><clipPath id={clip}><circle cx="13" cy="13" r="11" /></clipPath></defs>
         <circle className="tank" cx="13" cy="13" r="11" />
@@ -327,6 +341,17 @@ function WaveMark({ label = 'LightHouse is replying' }: { label?: string | null 
             <g className="swell front"><path d="M0 15 Q6.5 17.5 13 15 T26 15 T39 15 T52 15 V26 H0 Z" /></g>
           </g>
         </g>
+        {/* What pours out over the right rim. Outside the clipped group, because the
+            water that leaves the tank must still be drawn. */}
+        {spill && (
+          <g className="spill-out">
+            <path className="stream" d="M22 11 Q27 10.5 29 16" pathLength="100" />
+            <circle style={{ ['--dx' as string]: '6px', ['--dy' as string]: '9px' }} cx="25" cy="12" r="1.2" />
+            <circle style={{ ['--dx' as string]: '10px', ['--dy' as string]: '5px' }} cx="25" cy="12" r="1" />
+            <circle style={{ ['--dx' as string]: '13px', ['--dy' as string]: '11px' }} cx="25" cy="12" r=".9" />
+            <circle style={{ ['--dx' as string]: '8px', ['--dy' as string]: '13px' }} cx="25" cy="12" r=".8" />
+          </g>
+        )}
         <circle className="rim" cx="13" cy="13" r="12" />
         <circle className="ring" cx="13" cy="13" r="12" pathLength="100" />
       </svg>
@@ -358,19 +383,111 @@ function ThinkingWords({ provider, aboutAlert }: { provider: string; aboutAlert:
   return <span className="thinking-words" aria-hidden="true">{lines[index]}</span>;
 }
 
+/* The Clipboard API needs a secure context; 127.0.0.1 normally counts as one, but
+   if it is refused the old select-and-copy route still works. Focus goes back to
+   the button, so a keyboard user is not left on a hidden textarea. */
+async function copyText(text: string): Promise<boolean> {
+  try { if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); return true; } } catch { /* fall back */ }
+  const focused = document.activeElement as HTMLElement | null;
+  const area = document.createElement('textarea');
+  try {
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.position = 'fixed'; area.style.opacity = '0'; area.style.pointerEvents = 'none';
+    document.body.appendChild(area);
+    area.select();
+    return document.execCommand('copy');
+  } catch { return false; } finally { area.remove(); focused?.focus(); }
+}
+
+const reducedMotion = () => { try { return !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches; } catch { return false; } };
+const isoTime = (at: number) => { const date = new Date(at); return Number.isNaN(date.getTime()) ? undefined : date.toISOString(); };
+
+/* "2 min ago" has to move on by itself while the thread sits open. */
+function useNow(every = 60_000) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), every); return () => clearInterval(timer); }, [every]);
+  return now;
+}
+
 /* An open conversation. Nothing labels the speaker: a question sits in its own
    card on the right, the answer runs as plain text on the left. While the model
    works, the animated WaveMark and a status line sit above its words as they
-   arrive; once the answer is complete, only the text remains. */
-function Thread({ chat, thinking, streamed, provider }: { chat: Conversation; thinking: boolean; streamed: string; provider: string }) {
+   arrive; once the answer is complete, only the text remains, with a quiet row of
+   actions (copy, retry on the last answer) and when it was written.
+   Keyed by thread, so switching threads mid-answer never reads as a finish. */
+function Thread({ chat, thinking, streamed, provider, busy, retry }: {
+  chat: Conversation; thinking: boolean; streamed: string; provider: string; busy: boolean; retry: () => void;
+}) {
+  const now = useNow();
+  const [copied, setCopied] = useState<{ index: number; ok: boolean } | null>(null);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(null), 2000);
+    return () => clearTimeout(timer);
+  }, [copied]);
+  const copy = async (index: number, text: string) => setCopied({ index, ok: await copyText(text) });
+
+  /* The finish: when this thread's answer lands live, the tank tips its water out
+     over the right rim, the spill breaks into drops that drift off and fade, and the
+     empty tank fades last; then its row folds away so the answer text, already shown
+     beneath it, slides up without a jump. Worked out during render, not in an
+     effect, so the frame where the answer appears already holds the spilling mark.
+     Never on opening an old thread or a reload (thinking starts false), and not at
+     all under reduced motion. The timeout is a backstop if animationend never comes. */
+  const [wasThinking, setWasThinking] = useState(thinking);
+  const [spillAt, setSpillAt] = useState<number | null>(null);
+  if (thinking !== wasThinking) {
+    setWasThinking(thinking);
+    setSpillAt(!thinking && !reducedMotion() ? retryTurns(chat.turns)?.length ?? null : null);
+  }
+  useEffect(() => {
+    if (spillAt === null) return;
+    const timer = setTimeout(() => setSpillAt(null), 1500);
+    return () => clearTimeout(timer);
+  }, [spillAt]);
+
+  const lastIndex = chat.turns.length - 1;
   return (
     <div>
       <p className="eyebrow">Chat</p>
       <h2>{chat.title}</h2>
       <div className="thread">
-        {chat.turns.map((turn, index) => (
-          <div className={`turn ${turn.role}`} key={index}>{paragraphs(turn.text)}</div>
-        ))}
+        {chat.turns.map((turn, index) => {
+          const at = turn.at !== undefined ? isoTime(turn.at) : undefined;
+          if (turn.role === 'me') {
+            return <div className="turn me" key={index} title={at && fullTime(turn.at!)}>{paragraphs(turn.text)}</div>;
+          }
+          /* local notices are the app's own words, not an answer worth copying */
+          const canCopy = !turn.local;
+          const canRetry = index === lastIndex;
+          return (
+            <div className="turn them" key={index}>
+              {spillAt === index && (
+                <div className="spill-slot" onAnimationEnd={event => { if (event.target === event.currentTarget) setSpillAt(null); }}>
+                  <WaveMark spill />
+                </div>
+              )}
+              {paragraphs(turn.text)}
+              {(canCopy || canRetry || at) && (
+                <div className="turn-actions">
+                  {canCopy && (
+                    <button type="button" className="icon-btn" aria-label="Copy answer" title="Copy" onClick={() => copy(index, turn.text)}>
+                      <Icon name="copy" />
+                    </button>
+                  )}
+                  {canRetry && (
+                    <button type="button" className="icon-btn" aria-label="Retry answer" title="Retry" disabled={busy} onClick={retry}>
+                      <Icon name="retry" />
+                    </button>
+                  )}
+                  {at && <time dateTime={at} title={fullTime(turn.at!)}>{relativeTime(turn.at!, now)}</time>}
+                  {canCopy && <span className="copied" role="status">{copied?.index === index ? (copied.ok ? 'Copied' : 'Couldn’t copy') : ''}</span>}
+                </div>
+              )}
+            </div>
+          );
+        })}
         {thinking && (
           <div className="turn them">
             <div className="thinking">
@@ -500,10 +617,36 @@ function useHealth() {
   return health;
 }
 
-function Advanced({ selected }: { selected: any }) {
+/* The plain-English lead-in above a raw record: the alert's own triage explanation,
+   so the owner reads what the record shows before the JSON. Model output, so it is
+   only ever rendered as React text; no new AI call is made for it. */
+function evidenceLead(selected: any): string {
+  const text = (value: unknown) => (typeof value === 'string' ? value.trim() : '');
+  const explanation = text(selected?.triage?.explanation);
+  if (explanation) return `What this shows: ${explanation}`;
+  const action = text(selected?.triage?.recommended_action);
+  return action
+    ? `LightHouse has no plain-English summary for this record yet. Its suggested next step: ${action}`
+    : 'LightHouse has no plain-English summary for this record yet.';
+}
+
+function Advanced({ selected, jump, jumped }: { selected: any; jump: boolean; jumped: () => void }) {
   const [devices, setDevices] = useState<Device[] | null>(null);
   const health = useHealth();
+  const evidence = useRef<HTMLElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => { api.devices().then(setDevices).catch(() => setDevices([])); }, []);
+  const ready = !!devices && !!health;
+  /* Arriving from "Show evidence" lands on the record, not the top of the page. Only
+     .sheet scrolls, and scrollIntoView moves that scroller. Focus follows (without a
+     second scroll) so keyboard users land there too. Once per click: a later visit to
+     this tab starts at the top as usual. */
+  useEffect(() => {
+    if (!jump || !ready) return;
+    evidence.current?.scrollIntoView({ behavior: reducedMotion() ? 'auto' : 'smooth', block: 'start' });
+    heading.current?.focus({ preventScroll: true });
+    jumped();
+  }, [jump, ready]);
   if (!devices || !health) return <Skeleton />;
   const events = devices.reduce((sum, device) => sum + device.events, 0);
   return (
@@ -528,6 +671,36 @@ function Advanced({ selected }: { selected: any }) {
         </tbody>
       </table>
 
+      {/* The record itself first, introduced in plain words; the model's working after it. */}
+      <section id="alert-evidence" ref={evidence} aria-labelledby="alert-evidence-title">
+        <h3 id="alert-evidence-title" ref={heading} tabIndex={-1}>Selected alert evidence</h3>
+        {selected ? <>
+          <p className="lede"><b>{selected.title}</b></p>
+          <p className="muted">{evidenceLead(selected)}</p>
+          <pre className="evidence">{JSON.stringify(selected.raw, null, 2)}</pre>
+          <h3>Model reasoning</h3>
+          <p className="muted">{selected.triage?.reasoning || 'No additional reasoning provided.'}</p>
+          <h3>Confidence</h3>
+          <p className="muted">
+            Final: {selected.triage?.confidence || '—'} · Model’s own: {selected.triage?.model_confidence
+              || (selected.triage?.confidence_reasons?.some?.((reason: { code: string }) => reason.code === 'model_unavailable') ? 'none (no model output)' : 'not recorded')} · Guidance: {selected.triage?.guidance_tier || '—'}
+          </p>
+          <table className="list">
+            <tbody>
+              <tr><th>Downgrade</th><th>Why</th></tr>
+              {(Array.isArray(selected.triage?.confidence_reasons) ? selected.triage.confidence_reasons : []).map((reason: { code: string; detail: string }, index: number) => (
+                <tr key={index}><td><b>{reason.code}</b></td><td>{reason.detail}</td></tr>
+              ))}
+              {!selected.triage?.confidence_reasons?.length && <tr><td colSpan={2} className="muted">No code checks lowered the model’s confidence.</td></tr>}
+            </tbody>
+          </table>
+          <h3>What the model could not determine</h3>
+          <p className="muted">{selected.triage?.uncertainty || 'The model did not say.'}</p>
+          <h3>MITRE ATT&amp;CK</h3>
+          <p className="muted">{selected.mitre?.join(' · ') || 'Not supplied by this source.'}</p>
+        </> : <p className="muted">Open an alert and choose “Show evidence” to bring its raw record here.</p>}
+      </section>
+
       <h3>Appliance health</h3>
       <div className="panel">
         <div className="field"><div><b>Database</b><p>Local SQLite store for alerts and explanations.</p></div><span className="pill">{health.database || 'unknown'}</span></div>
@@ -535,31 +708,6 @@ function Advanced({ selected }: { selected: any }) {
         <div className="field"><div><b>Load average</b><p>1 / 5 / 15 minutes.</p></div><span className="pill">{loads(health)}</span></div>
         <div className="field"><div><b>Disk free</b><p>Retention trims raw events after 30 days.</p></div><span className="pill">{gigabytes(health.disk_free_bytes)}</span></div>
       </div>
-
-      <h3>Selected alert evidence</h3>
-      {selected ? <>
-        <p className="lede">{selected.title} — model reasoning</p>
-        <p className="muted">{selected.triage?.reasoning || 'No additional reasoning provided.'}</p>
-        <h3>Confidence</h3>
-        <p className="muted">
-          Final: {selected.triage?.confidence || '—'} · Model’s own: {selected.triage?.model_confidence
-            || (selected.triage?.confidence_reasons?.some?.((reason: { code: string }) => reason.code === 'model_unavailable') ? 'none (no model output)' : 'not recorded')} · Guidance: {selected.triage?.guidance_tier || '—'}
-        </p>
-        <table className="list">
-          <tbody>
-            <tr><th>Downgrade</th><th>Why</th></tr>
-            {(Array.isArray(selected.triage?.confidence_reasons) ? selected.triage.confidence_reasons : []).map((reason: { code: string; detail: string }, index: number) => (
-              <tr key={index}><td><b>{reason.code}</b></td><td>{reason.detail}</td></tr>
-            ))}
-            {!selected.triage?.confidence_reasons?.length && <tr><td colSpan={2} className="muted">No code checks lowered the model’s confidence.</td></tr>}
-          </tbody>
-        </table>
-        <h3>What the model could not determine</h3>
-        <p className="muted">{selected.triage?.uncertainty || 'The model did not say.'}</p>
-        <h3>MITRE ATT&amp;CK</h3>
-        <p className="muted">{selected.mitre?.join(' · ') || 'Not supplied by this source.'}</p>
-        <pre className="evidence">{JSON.stringify(selected.raw, null, 2)}</pre>
-      </> : <p className="muted">Open an alert and choose “Show evidence” to bring its raw record here.</p>}
     </div>
   );
 }
@@ -605,6 +753,54 @@ function Settings() {
       </div>
       {saved && <p className="notice" role="status">{saved}</p>}
     </div>
+  );
+}
+
+/* The admin's own notes for the AI. Its own section with its own loading, so a
+   failed fetch shows a plain message here instead of taking the Admin page down.
+   The server caps, normalises and fences these; the built-in rules come first. */
+function AiInstructionsSection() {
+  const [saved, setSaved] = useState<AiInstructions | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [business, setBusiness] = useState('');
+  const [style, setStyle] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState('');
+  const id = useId();
+  const show = (value: AiInstructions) => { setSaved(value); setBusiness(value.business); setStyle(value.style); };
+  useEffect(() => { api.aiInstructions().then(show).catch(() => setFailed(true)); }, []);
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setNotice('');
+    try { show(await api.setAiInstructions(business, style)); setNotice('Saved. LightHouse uses these from the next answer on.'); }
+    catch (failure) { setNotice(detailOf(failure, 'Could not save the AI instructions. Try again.')); }
+    finally { setBusy(false); }
+  };
+  const box = (key: string, label: string, help: string, value: string, change: (value: string) => void, max: number) => (
+    <div className="field stacked">
+      <div><label htmlFor={`${id}-${key}`}><b>{label}</b></label><p id={`${id}-${key}-help`}>{help}</p></div>
+      <textarea id={`${id}-${key}`} aria-describedby={`${id}-${key}-help`} rows={4} maxLength={max} value={value} onChange={event => change(event.target.value)} />
+      <small className="count">{value.length} / {max}</small>
+    </div>
+  );
+  return (
+    <>
+      <h3>AI instructions</h3>
+      <p className="lede">LightHouse’s built-in safety rules always come first; these notes add to them. Longer notes make the AI on this computer slower to start answering. When chat uses Purdue GenAI Studio, these notes are sent along with each question.</p>
+      <div className="panel">
+        {failed ? <p className="muted">LightHouse couldn’t load the AI instructions. Reload the page to try again.</p>
+          : !saved ? <p className="muted">Loading…</p>
+          : (
+            <form onSubmit={save}>
+              {box('business', 'About this business', 'Used by chat and alert triage. For example: what the business does, the key computers, and who your IT contact is.', business, setBusiness, saved.max_chars)}
+              {box('style', 'How to answer', 'Used by chat only. For example: “use bullet points”.', style, setStyle, saved.max_chars)}
+              <div className="row-end"><button className="btn" disabled={busy}>{busy ? 'Saving…' : 'Save'}</button></div>
+            </form>
+          )}
+      </div>
+      {notice && <p className="notice" role="status">{notice}</p>}
+    </>
   );
 }
 
@@ -712,6 +908,8 @@ function Admin({ session, onProviderChange }: { session: Session; onProviderChan
       </div>
       {modelNotice && <p className="notice" role="status">{modelNotice}</p>}
 
+      <AiInstructionsSection />
+
       <h3>Appliance</h3>
       <div className="panel">
         <div className="field"><div><b>Platform</b><p>The host this appliance is running on.</p></div><span className="pill">{health.platform || 'unknown'}</span></div>
@@ -797,13 +995,64 @@ function App() {
       .catch(() => { /* the fallback title stays */ });
   };
 
+  /* Streams one answer into thread `id`. Shared by a new question and by Retry, so
+     both keep the same guards: one answer at a time, words shown as they arrive, a
+     cut-off answer keeps what was written, and failures arrive as replies rather
+     than errors. Resolves true when the model itself answered. */
+  const stream = async (id: string, messages: ChatMessage[], alertId: number | null): Promise<boolean> => {
+    pending.current = id;
+    setPendingId(id);
+    setStreamed('');
+    let answered = false;
+    let received = '';
+    try {
+      let replies: Turn[];
+      try {
+        const result = await api.chatStream(messages, alertId, piece => { received += piece; setStreamed(received); });
+        answered = result.available && received.trim() !== '';
+        const text = received.trim();
+        /* the AI-unavailable notice is fixed server text, not the model's words */
+        replies = !text ? [{ role: 'them', text: chatFailure(null, false), local: true }]
+          : [result.available ? { role: 'them', text } : { role: 'them', text, local: true }];
+      } catch (failure) {
+        /* A stream cut off midway keeps what the model already wrote. */
+        const partial = received.trim();
+        replies = partial
+          ? [{ role: 'them', text: partial }, { role: 'them', text: 'LightHouse stopped before finishing this answer. Try asking again.', local: true }]
+          : [{ role: 'them', text: chatFailure(failure, alertId !== null), local: true }];
+      }
+      const at = Date.now();
+      update(current => current.map(entry => entry.id === id ? { ...entry, turns: [...entry.turns, ...replies.map(reply => ({ ...reply, at }))], updated: at } : entry));
+    } finally {
+      pending.current = null;
+      setPendingId(null);
+      setStreamed('');
+    }
+    return answered;
+  };
+
+  /* Answers the thread's last question again: every reply after it (answer, cut-off
+     answer, failure notice) is dropped and a new one streamed. The title stays. */
+  const retry = (id: string) => {
+    if (pending.current) return;
+    const chat = chats.find(entry => entry.id === id);
+    const turns = chat && retryTurns(chat.turns);
+    if (!chat || !turns) return;
+    update(current => {
+      const stored = current.find(entry => entry.id === id);
+      if (!stored) return current;
+      return [{ ...stored, turns: retryTurns(stored.turns) ?? stored.turns, updated: Date.now() }, ...current.filter(entry => entry.id !== id)];
+    });
+    void stream(id, toChatMessages(turns), chat.alertId ?? null);
+  };
+
   /* A question either continues the open thread or starts a new one; either way it
      is one row in the sidebar, never one row per message. */
   const ask: Ask = (question, about) => {
     const text = question.trim();
     if (!text) return;
     if (pending.current) { setActiveId(pending.current); setTab('home'); return; }
-    const turn: Turn = { role: 'me', text };
+    const turn: Turn = { role: 'me', text, at: Date.now() };
     const existing = !about && activeId ? chats.find(chat => chat.id === activeId) : undefined;
     const chat: Conversation = existing
       ? { ...existing, turns: [...existing.turns, turn], updated: Date.now() }
@@ -817,43 +1066,18 @@ function App() {
       const stored = current.find(entry => entry.id === chat.id);
       return [stored ? { ...stored, turns: [...stored.turns, turn], updated: chat.updated } : chat, ...current.filter(entry => entry.id !== chat.id)];
     });
-    pending.current = chat.id;
-    setPendingId(chat.id);
-    setStreamed('');
-    void (async () => {
-      let answered = false;
-      let received = '';
-      try {
-        let replies: Turn[];
-        try {
-          const result = await api.chatStream(messages, alertId, piece => { received += piece; setStreamed(received); });
-          answered = result.available && received.trim() !== '';
-          const text = received.trim();
-          /* the AI-unavailable notice is fixed server text, not the model's words */
-          replies = !text ? [{ role: 'them', text: chatFailure(null, false), local: true }]
-            : [result.available ? { role: 'them', text } : { role: 'them', text, local: true }];
-        } catch (failure) {
-          /* A stream cut off midway keeps what the model already wrote. */
-          const partial = received.trim();
-          replies = partial
-            ? [{ role: 'them', text: partial }, { role: 'them', text: 'LightHouse stopped before finishing this answer. Try asking again.', local: true }]
-            : [{ role: 'them', text: chatFailure(failure, alertId !== null), local: true }];
-        }
-        update(current => current.map(entry => entry.id === chat.id ? { ...entry, turns: [...entry.turns, ...replies], updated: Date.now() } : entry));
-      } finally {
-        pending.current = null;
-        setPendingId(null);
-        setStreamed('');
-      }
+    void stream(chat.id, messages, alertId).then(answered => {
       /* Named after the answer, not alongside it, so the title never queues ahead of
          the reply on the one local model. A thread opened from an alert keeps the
          alert's name: its question is generic, so the model could not do better. */
       if (!existing && !about && answered) nameChat(chat.id, text);
-    })();
+    });
   };
 
   const act = async (id: number, status: string) => { await api.setStatus(id, status); load(); };
-  const showEvidence = async (alert: Alert) => { setSelected(await api.detail(alert.id)); setTab('advanced'); };
+  /* Set by "Show evidence" and cleared by Advanced once it has scrolled to the record. */
+  const [jumpToEvidence, setJumpToEvidence] = useState(false);
+  const showEvidence = async (alert: Alert) => { setSelected(await api.detail(alert.id)); setJumpToEvidence(true); setTab('advanced'); };
 
   if (stopped) return (
     <main className="login">
@@ -869,6 +1093,7 @@ function App() {
   if (session.must_change_password) return <ChangePassword session={session} onDone={setSession} />;
 
   const canSeeEvidence = advanced(session.role);
+  const startChat = () => { setActiveId(null); setTab('home'); };
   const pageProps: PageProps = { alerts: alerts || [], canSeeEvidence, act, ask, evidence: showEvidence, monitoring, monitoringBusy,
     toggleMonitoring: session.role === 'admin' ? toggleMonitoring : undefined,
     shutDown: session.role === 'admin' ? shutDown : undefined };
@@ -893,10 +1118,13 @@ function App() {
 
   const page = () => {
     if (!alerts) return <Skeleton />;
-    if (tab === 'home') return chat ? <Thread chat={chat} thinking={pendingId === chat.id} streamed={pendingId === chat.id ? streamed : ''} provider={provider} /> : <Home {...pageProps} />;
+    if (tab === 'home') return chat
+      ? <Thread key={chat.id} chat={chat} thinking={pendingId === chat.id} streamed={pendingId === chat.id ? streamed : ''} provider={provider}
+        busy={thinking} retry={() => retry(chat.id)} />
+      : <Home {...pageProps} />;
     if (tab === 'alerts') return <Alerts {...pageProps} />;
     if (tab === 'trends') return <Trends alerts={alerts} />;
-    if (tab === 'advanced') return <Advanced selected={selected} />;
+    if (tab === 'advanced') return <Advanced selected={selected} jump={jumpToEvidence} jumped={() => setJumpToEvidence(false)} />;
     if (tab === 'settings') return <Settings />;
     if (tab === 'admin') return <Admin session={session} onProviderChange={setProvider} />;
     return null;
@@ -909,14 +1137,28 @@ function App() {
           <button className="collapse" title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-expanded={!collapsed}
             onClick={() => setCollapsed(!collapsed)}>☰</button>
+          {/* Quick actions beside the toggle while the rail is open. Pause and Shut
+              down reuse the Home card's handlers and confirmations; the server still
+              decides who may use them. */}
+          {!collapsed && <>
+            <button className="rail-btn" type="button" title="New chat" aria-label="New chat" onClick={startChat}><Icon name="compose" size={20} /></button>
+            {session.role === 'admin' && monitoring?.available && <>
+              <button className="rail-btn" type="button" disabled={monitoringBusy} onClick={toggleMonitoring}
+                title={monitoring.paused ? 'Resume monitoring' : 'Pause monitoring'} aria-label={monitoring.paused ? 'Resume monitoring' : 'Pause monitoring'}>
+                <Icon name={monitoring.paused ? 'resume' : 'pause'} size={20} />
+              </button>
+              <button className="rail-btn" type="button" disabled={monitoringBusy} onClick={shutDown} title="Shut down LightHouse" aria-label="Shut down LightHouse">
+                <Icon name="power" size={20} />
+              </button>
+            </>}
+          </>}
         </div>
         <div className="brand">
           <img src="/assets/lighthouse-logo.png" alt="LightHouse" />
           <span className="txt"><b>LightHouse</b><span>Guiding You to Safer Shores</span></span>
         </div>
         <nav>{primary.map(item => <Nav key={item} item={item} tab={tab} setTab={setTab} />)}</nav>
-        <Chats chats={chats} activeId={activeId} start={() => { setActiveId(null); setTab('home'); }}
-          open={id => { setActiveId(id); setTab('home'); }} />
+        <Chats chats={chats} activeId={activeId} open={id => { setActiveId(id); setTab('home'); }} />
         <nav className="bottom">
           <Nav item="settings" tab={tab} setTab={setTab} />
           {session.role === 'admin' && <Nav item="admin" tab={tab} setTab={setTab} />}
