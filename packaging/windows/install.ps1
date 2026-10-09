@@ -38,7 +38,7 @@ try {
     }
     Protect-DataDirectory $DataDir
     $dependencyHashes = Get-Content "$PSScriptRoot\dependency-hashes.json" -Raw | ConvertFrom-Json
-    New-Item -ItemType Directory -Force "$DataDir\logs", "$DataDir\cache", "$DataDir\config", "$DataDir\state", "$DataDir\models", "$DataDir\rules", "$DataDir\suricata", "$AppDir\tools" | Out-Null
+    New-Item -ItemType Directory -Force "$DataDir\logs", "$DataDir\cache", "$DataDir\cache\llm-state", "$DataDir\config", "$DataDir\state", "$DataDir\models", "$DataDir\rules", "$DataDir\suricata", "$AppDir\tools" | Out-Null
 } catch {
     # The data tree is not trusted yet, so the reason goes only to the result file.
     Write-Host "INSTALLATION FAILED: $_"
@@ -327,7 +327,9 @@ try {
         # One-time admin password in a fixed, admin-only file; the service logs are
         # rotated and renamed on every restart.
         "LIGHTHOUSE_FIRST_RUN_DIR=$DataDir",
-        "LIGHTHOUSE_MODEL_PATH=$modelPath")
+        "LIGHTHOUSE_MODEL_PATH=$modelPath",
+        # Chat's instructions, already read, kept across restarts (admin-only data folder).
+        "LIGHTHOUSE_MODEL_STATE_DIR=$DataDir\cache\llm-state")
     # Optional "ModelThreads" in windows.json overrides the automatic choice.
     if ($config.ModelThreads -and [int]$config.ModelThreads -gt 0) { $environment += "LIGHTHOUSE_MODEL_THREADS=$([int]$config.ModelThreads)" }
     Register 'LightHouse-API' $python "-m uvicorn triage.api:app --host 127.0.0.1 --port $($config.ApiPort)" $environment

@@ -154,6 +154,32 @@ a network port for it and no separate AI service exists.
   on the 14-thread development machine, plus about 5-10 seconds to load once. A
   burst of distinct alerts is therefore worked through over minutes; repeats are
   deduplicated first and never reach the model.
+- **Speed-ups that never change an answer.** *Prompt-lookup speculative decoding*
+  proposes up to 10 tokens copied from the prompt (addresses, process names, JSON
+  keys) and the model checks them in one batch; a proposed token is kept only if
+  it is exactly the token the model itself chose, so replies are the same, only
+  sooner (`LIGHTHOUSE_MODEL_SPECULATIVE=0` turns it off). *Chat comes first:*
+  while the API service answers or warms a chat it holds the `Global\LightHouse-LocalAI-Chat`
+  mutex; background triage waits for it (at most 120 s per alert) and stops at
+  the next token if a chat starts, then re-runs that alert from the start, so its
+  result is what an uninterrupted run gives. After three interruptions of one
+  alert it finishes regardless, so monitoring never stalls. *Saved instructions:*
+  the API service saves the context state of chat's system prompt (instructions
+  only; never alerts, questions or history) in `LIGHTHOUSE_MODEL_STATE_DIR`, so the
+  first question after a restart does not re-read it. The file (about 130 KB per
+  token: about 70 MB for the built-in instructions) is keyed to the model file, runtime version,
+  context and thread settings and the exact prompt; editing the AI instructions
+  makes a new one, and only the two newest are kept. A file that does not match
+  is ignored and rebuilt.
+- **Proving it.** With the services stopped (or monitoring paused), an
+  administrator can run
+  `& "$app\runtime\python.exe" -m triage.local_model bench --model-path <model.gguf> --samples <repo>\samples --out <folder>`.
+  It triages the sample records and asks three fixed questions at temperature 0,
+  with speculative decoding off and then on, prints load time, time to first chat
+  token, tokens per second, triage time and grammar retries for each, says whether
+  every answer was byte-identical, times a cold first question with and without
+  the saved state, and writes a JSON report. It loads the model three times and
+  takes several minutes; setup never runs it.
 
 **CPU and runtime requirements.** The bundled wheel is the upstream prebuilt CPU
 build, compiled for AVX2/FMA/F16C (Intel Haswell 2013+, AMD Zen/Excavator+). On a
@@ -273,6 +299,8 @@ installers. Honor a dependency's reported reboot requirement.
 | LIGHTHOUSE_GENAI_KEY_FILE | `<data>\config\genai-key.bin`: the DPAPI-encrypted Purdue GenAI Studio key (opt-in chat, `python -m triage.cloud_key set`; see README) |
 | LIGHTHOUSE_GENAI_MODEL | the model saved with `cloud_key model`, else `gpt-oss:120b` |
 | LIGHTHOUSE_MODEL_THREADS | automatic: one thread per physical core, skipping the separate low-power core island of hybrid laptop CPUs (Intel Core Ultra). Set `"ModelThreads": N` in `windows.json` and rerun setup to override; compare values with `python -m triage.local_model smoke-test --threads N` |
+| LIGHTHOUSE_MODEL_SPECULATIVE | `1` (on): prompt-lookup speculative decoding, same answers sooner. `0` turns it off; compare with `python -m triage.local_model bench` |
+| LIGHTHOUSE_MODEL_STATE_DIR | unset (off); installer sets `<data>\cache\llm-state`. Where the API service keeps chat's already-read system prompt across restarts |
 
 The background triage service runs at below-normal CPU priority, so a chat the
 owner is waiting on always gets the processor first. Chat keeps recent prompt

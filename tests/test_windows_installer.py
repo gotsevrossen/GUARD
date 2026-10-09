@@ -174,6 +174,18 @@ def test_background_triage_yields_to_chat():
     assert 'LIGHTHOUSE_MODEL_THREADS=' in install
 
 
+def test_saved_chat_state_lives_in_the_protected_data_folder():
+    install = (WINDOWS / 'install.ps1').read_text(encoding='utf-8')
+    # Under <data>, which Protect-DataDirectory makes Administrators/SYSTEM-only,
+    # created by setup and passed to both services like every other path.
+    assert '"LIGHTHOUSE_MODEL_STATE_DIR=$DataDir\\cache\\llm-state"' in install
+    created = next(line for line in install.splitlines() if 'New-Item -ItemType Directory -Force "$DataDir\\logs"' in line)
+    assert '"$DataDir\\cache\\llm-state"' in created
+    # Speculative decoding defaults on in code; setup never forces it, and the
+    # benchmark is never run by setup.
+    assert 'LIGHTHOUSE_MODEL_SPECULATIVE' not in install and 'local_model bench' not in install
+
+
 def test_dev_update_only_touches_lighthouse_code():
     update = (WINDOWS / 'dev-update.ps1').read_text(encoding='utf-8')
     assert 'IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)' in update

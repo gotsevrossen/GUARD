@@ -1,4 +1,4 @@
-import { FormEvent, KeyboardEvent, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { FormEvent, KeyboardEvent, ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { api, AiInstructions, Alert, ChatMessage, ChatModels, getSession, login, logout, Monitoring, Session, statusOf, UpdateInfo } from './api';
 import { clip, Conversation, fullTime, loadConversations, MAX_QUESTION, newId, relativeTime, retryTurns, saveConversations, titleFor, toChatMessages, Turn } from './conversations';
@@ -6,7 +6,19 @@ import './styles.css';
 import './sidebar.css';
 
 const advanced = (role?: string) => role === 'analyst' || role === 'admin';
-const icons: Record<string, string> = { home: '⌂', alerts: '!', trends: '↗', advanced: '⌘', settings: '⚙', admin: '♙' };
+/* Trends: four solid bars, each taller than the last. The other nav icons are line
+   icons from ICONS; functions, because ICONS and Icon are declared further down. */
+const TrendsIcon = (
+  <svg viewBox="0 0 24 24" width={18} height={18} fill="currentColor" aria-hidden="true" focusable="false">
+    <rect x="2.5" y="15" width="3.8" height="6.5" rx="1.2" /><rect x="7.7" y="11.5" width="3.8" height="10" rx="1.2" />
+    <rect x="12.9" y="7.5" width="3.8" height="14" rx="1.2" /><rect x="18.1" y="3" width="3.8" height="18.5" rx="1.2" />
+  </svg>
+);
+const icons: Record<string, () => ReactNode> = {
+  home: () => <Icon name="home" size={18} />, alerts: () => <Icon name="alerts" size={18} />, trends: () => TrendsIcon,
+  advanced: () => <Icon name="advanced" size={18} />, settings: () => <Icon name="settings" size={18} />,
+  admin: () => <Icon name="admin" size={18} />,
+};
 const labels: Record<string, string> = { home: 'Home', alerts: 'Alerts', trends: 'Trends', advanced: 'Advanced analytics', settings: 'Settings', admin: 'Admin' };
 const URGENT = ['high', 'critical'];
 const PROMPTS = ['Summarize my network and security status', 'Explain what my most recent alert means', 'What should I address first?', 'Are there any unusual devices on my network?'];
@@ -109,7 +121,7 @@ const Skeleton = () => (
 
 const Nav = ({ item, tab, setTab }: { item: string; tab: string; setTab: (tab: string) => void }) => (
   <button title={labels[item]} className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>
-    <span className="nav-icon">{icons[item]}</span><span className="nav-label">{labels[item]}</span>
+    <span className="nav-icon">{icons[item]()}</span><span className="nav-label">{labels[item]}</span>
   </button>
 );
 
@@ -122,6 +134,15 @@ const ICONS = {
   pause: 'M9 5v14M15 5v14',
   resume: 'M7 4.5v15l12-7.5z',
   power: 'M12 3v9M6.34 6.34a8 8 0 1 0 11.32 0',
+  // Sidebar: the owner's picks from the icon options (house by the water, warning
+  // sign, magnifier on a pulse, sliders, person with shield, door and arrow, panel).
+  home: 'M5 12.5 12 7l7 5.5V17H5zM10.5 17v-3h3v3M2.5 21c1.6-1.2 3.4-1.2 5 0s3.4 1.2 5 0 3.4-1.2 5 0 2.4 1 4 0',
+  alerts: 'M12 3.5 21.5 20h-19zM12 10v4.5M12 17.3h.01',
+  advanced: 'M17 10.5a6.5 6.5 0 1 1-13 0 6.5 6.5 0 0 1 13 0zM20.5 20.5l-5.3-5.3M6.5 10.5h1.8l1-2.2 2 4.4 1-2.2h1.7',
+  settings: 'M4 6h9M17 6h3M4 12h1M9 12h11M4 18h11M19 18h1M17 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zM9 12a2 2 0 1 1-4 0 2 2 0 0 1 4 0zM19 18a2 2 0 1 1-4 0 2 2 0 0 1 4 0z',
+  admin: 'M13 8a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0zM3 20c0-3.6 2.9-6 6.5-6 1.3 0 2.5.3 3.5.9M17.5 13 21 14.3v2.6c0 2-1.5 3.4-3.5 4.1-2-.7-3.5-2.1-3.5-4.1v-2.6z',
+  signout: 'M10 4H6.5A1.5 1.5 0 0 0 5 5.5v13A1.5 1.5 0 0 0 6.5 20H10M14.5 8l4 4-4 4M18.5 12h-9',
+  sidebar: 'M6 4h12a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3zM9.5 4v16',
 };
 const Icon = ({ name, size = 16 }: { name: keyof typeof ICONS; size?: number }) => (
   <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="2"
@@ -207,6 +228,17 @@ function ChangePassword({ session, onDone }: { session: Session; onDone: (sessio
   );
 }
 
+/* Opening an alert usually comes just before "Ask LightHouse about this", so the
+   server pre-reads that alert's chat context now and the answer starts sooner. The
+   server skips it while the model is busy; here it is at most once a minute per alert. */
+const alertWarmedAt = new Map<number, number>();
+const warmAlert = (id: number) => {
+  const now = Date.now();
+  if (now - (alertWarmedAt.get(id) || 0) < 60_000) return;
+  alertWarmedAt.set(id, now);
+  api.chatWarm(id);
+};
+
 /* One alert, open or closed. A native details element, so it expands without
    script and stays keyboard-operable. */
 function AlertItem({ alert, showStatus, canSeeEvidence, act, ask, evidence }: {
@@ -220,7 +252,7 @@ function AlertItem({ alert, showStatus, canSeeEvidence, act, ask, evidence }: {
   const guidance = isOpen ? GUIDANCE[tier] : undefined;
   const confidence = CONFIDENCE_LABEL[alert.confidence || 'low'] || CONFIDENCE_LABEL.low;
   return (
-    <details className="alert">
+    <details className="alert" onToggle={event => { if (event.currentTarget.open) warmAlert(alert.id); }}>
       <summary>
         <span className={`dot ${alert.severity}`} />
         <div>
@@ -1136,7 +1168,7 @@ function App() {
         <div className="rail-top">
           <button className="collapse" title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-expanded={!collapsed}
-            onClick={() => setCollapsed(!collapsed)}>☰</button>
+            onClick={() => setCollapsed(!collapsed)}><Icon name="sidebar" size={20} /></button>
           {/* Quick actions beside the toggle while the rail is open. Pause and Shut
               down reuse the Home card's handlers and confirmations; the server still
               decides who may use them. */}
@@ -1163,7 +1195,7 @@ function App() {
           <Nav item="settings" tab={tab} setTab={setTab} />
           {session.role === 'admin' && <Nav item="admin" tab={tab} setTab={setTab} />}
           <button onClick={async () => { await logout(); setSession(null); }}>
-            <span className="nav-icon">⇥</span><span className="nav-label">Sign out</span>
+            <span className="nav-icon"><Icon name="signout" size={18} /></span><span className="nav-label">Sign out</span>
           </button>
         </nav>
       </aside>

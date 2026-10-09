@@ -34,6 +34,7 @@ nav button{display:flex;align-items:center;width:100%;margin:3px 0;padding:12px 
 nav button:hover{background:rgba(255,255,255,.14);color:#fff}
 nav button.active{background:#fff;color:var(--green-deep);font-weight:600}
 .nav-icon{display:inline-grid;width:22px;place-items:center;margin-right:11px;font-size:1.05rem;font-weight:700}
+.nav-icon svg{display:block}
 .bottom{margin-top:auto;padding-top:14px;border-top:1px solid rgba(255,255,255,.28)}
 
 /* ---- Recent chats: one row per conversation, the way the Claude apps list them.
