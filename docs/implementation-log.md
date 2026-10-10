@@ -1,5 +1,7 @@
 # Implementation log
 
+> **Legacy (Linux appliance era); not current.** This document describes the original Linux appliance plan and is kept for history only. LightHouse is now Windows-only; see [windows-install.md](windows-install.md) and the README for the current product.
+
 ## 2026-09-08 — Phases 3–5 initial build
 
 - Added a Python/FastAPI triage service with source-specific JSON parsers, a common Pydantic alert schema, duplicate suppression, a swappable Ollama/fixture model interface, and SQLite storage.

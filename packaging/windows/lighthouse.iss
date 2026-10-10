@@ -32,7 +32,7 @@ CloseApplications=no
 UninstallDisplayIcon={app}\lighthouse.ico
 [Messages]
 WelcomeLabel1=Welcome to LightHouse
-WelcomeLabel2=LightHouse watches your network and this computer for security problems and explains what it finds in plain English. Nothing leaves this computer.%n%nSetup downloads the monitoring tools and the local AI model (about 2.5 GB), so stay connected to the internet.%n%nOne extra window opens for Npcap. Tick "WinPcap API-compatible mode" there.%n%nLightHouse needs at least 8 GB of memory.
+WelcomeLabel2=LightHouse watches your network and this computer for security problems and explains what it finds in plain English. Your monitoring data and alerts are checked on this computer and stay here; only the update check and, if you turn it on, Purdue GenAI Studio chat go online.%n%nSetup downloads the monitoring tools and the local AI model (about 2.5 GB), so stay connected to the internet.%n%nOne extra window opens for Npcap. Tick "WinPcap API-compatible mode" there.%n%nLightHouse needs at least 8 GB of memory.
 FinishedHeadingLabel=LightHouse is ready
 FinishedLabel=LightHouse is monitoring in the background and starts with Windows.%n%nOpen the dashboard any time from the Start menu or the desktop shortcut, or go to http://127.0.0.1:8000 in your browser.%n%nSign in as admin. Your one-time password is in first-run-password.txt in the data folder inside the LightHouse install folder. Read it from PowerShell run as administrator ("First sign-in" in the README has the command). It is deleted once you choose your own password.
 [Tasks]
@@ -64,8 +64,11 @@ Name: "{group}\LightHouse Logs"; Filename: "{app}\data\logs"
 [Run]
 ; Offered only when dependency setup succeeded; postinstall entries run as the
 ; signed-in user, so the browser does not open elevated.
-Filename: "{code:EdgePath}"; Parameters: "--app=http://127.0.0.1:8000"; Description: "Open the LightHouse dashboard"; Flags: postinstall nowait skipifsilent; Check: SetupSucceeded and HasEdge
-Filename: "http://127.0.0.1:8000"; Description: "Open the LightHouse dashboard"; Flags: postinstall shellexec nowait skipifsilent; Check: SetupSucceeded and not HasEdge
+Filename: "{code:EdgePath}"; Parameters: "--app={code:DashboardUrl}"; Description: "Open the LightHouse dashboard"; Flags: postinstall nowait skipifsilent; Check: SetupSucceeded and HasEdge
+Filename: "{code:DashboardUrl}"; Description: "Open the LightHouse dashboard"; Flags: postinstall shellexec nowait skipifsilent; Check: SetupSucceeded and not HasEdge
+[UninstallDelete]
+; Written by install.ps1 (the dashboard port for the shortcut), not by [Files].
+Type: files; Name: "{app}\setup\api-port.txt"
 [UninstallRun]
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\setup\uninstall.ps1"" -AppDir ""{app}"""; Flags: runhidden waituntilterminated; RunOnceId: "RemoveServices"
 [Code]
@@ -101,6 +104,29 @@ function EdgePath(Param: String): String;
 begin
   Result := FindEdge;
 end;
+
+// The dashboard's address. ApiPort lives in the admin-only windows.json, so
+// install.ps1 copies it to setup\api-port.txt; 8000 when that is missing or invalid.
+function DashboardUrl(Param: String): String;
+var Text: AnsiString; Port: Integer;
+begin
+  Port := 0;
+  if LoadStringFromFile(ExpandConstant('{app}\setup\api-port.txt'), Text) then
+    Port := StrToIntDef(Trim(String(Text)), 0);
+  if (Port < 1024) or (Port > 65535) then Port := 8000;
+  Result := 'http://127.0.0.1:' + IntToStr(Port);
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+var Text: String;
+begin
+  // The finish text names the default address; show the configured one.
+  if CurPageID = wpFinished then begin
+    Text := WizardForm.FinishedLabel.Caption;
+    StringChangeEx(Text, 'http://127.0.0.1:8000', DashboardUrl(''), True);
+    WizardForm.FinishedLabel.Caption := Text;
+  end;
+end;
 procedure InitializeWizard;
 begin
   // Green page header with white titles, like the dashboard's sidebar.
@@ -125,14 +151,17 @@ begin
   Result := WizardForm.PrevAppDir;
 end;
 
-// True for a folder that is empty, absent, or an existing LightHouse install. Any
-// other content could have been placed there by someone else, and the program is
-// about to run from this folder as SYSTEM.
+// True for a folder that is empty or absent. Any other content could have been
+// placed there by someone else (any user can create folders at the root of a second
+// drive), and the program is about to run from this folder as SYSTEM. An existing
+// install is recognised only through Inno's own record of it (PreviousAppDir, read
+// from the admin-only uninstall registry key), never by a file inside the folder,
+// which anyone could fake.
 function SafeTarget(const Dir: String): Boolean;
 var FindRec: TFindRec;
 begin
   Result := True;
-  if not DirExists(Dir) or FileExists(AddBackslash(Dir) + 'setup\install.ps1') then Exit;
+  if not DirExists(Dir) then Exit;
   if FindFirst(AddBackslash(Dir) + '*', FindRec) then begin
     try
       repeat
@@ -225,7 +254,9 @@ begin
   // already; C:\LightHouse or a folder on another drive is not.
   if not ForceDirectories(App) or not RunIcacls('"' + App + '" /reset')
      or not RunIcacls('"' + App + '" /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F *S-1-5-32-545:(OI)(CI)RX')
-     or not RunIcacls('"' + App + '" /setowner *S-1-5-32-544') then begin
+     // Owner on the whole tree, not only the root: a planted file's owner could
+     // otherwise reopen its permissions after install.ps1 resets them.
+     or not RunIcacls('"' + App + '" /setowner *S-1-5-32-544 /T /C /Q') then begin
     Result := 'Could not set permissions on ' + App + '. Choose a folder on an internal NTFS drive.';
     Exit;
   end;

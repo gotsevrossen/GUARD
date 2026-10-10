@@ -14,7 +14,8 @@ import bcrypt
 from .dedupe import fingerprint
 from .paths import data_dir, first_run_handoff_configured, first_run_password_path, is_desktop
 from .guidance import guidance_tier
-from .schema import AlertDetail, AlertStatus, AssessedTriage, NormalizedAlert
+from .audit import AUDIT_DETAIL_MAX_CHARS, AUDIT_PAGE_MAX, AUDIT_TARGET_MAX_CHARS, AuditAction, AuditEntry, clean
+from .schema import DEFAULT_ANSWER_STYLE, AlertDetail, AlertStatus, AssessedTriage, NormalizedAlert, normalize_note
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS alerts (id INTEGER PRIMARY KEY, source TEXT NOT NULL, source_event_id TEXT,
@@ -35,6 +36,12 @@ CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, user_id INTEGER NOT
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS user_settings (user_id INTEGER NOT NULL REFERENCES users(id), key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(user_id,key));
+CREATE TABLE IF NOT EXISTS audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL, username TEXT NOT NULL,
+  action TEXT NOT NULL, target TEXT, detail TEXT);
+CREATE TRIGGER IF NOT EXISTS audit_log_no_update BEFORE UPDATE ON audit_log
+  BEGIN SELECT RAISE(ABORT, 'the activity log is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS audit_log_no_delete BEFORE DELETE ON audit_log
+  BEGIN SELECT RAISE(ABORT, 'the activity log is append-only'); END;
 """
 
 # bcrypt itself refuses passwords longer than this; bcrypt >= 4.1 raises ValueError
@@ -46,6 +53,34 @@ AI_BUSINESS_KEY = "ai_business_context"
 AI_STYLE_KEY = "ai_answer_style"
 LEGACY_CONFIDENCE_REASONS = json.dumps([{"code": "legacy",
                                          "detail": "Triaged before LightHouse checked AI confidence."}])
+# Set once every stored alert timestamp has been rewritten in UTC (see _migrate).
+UTC_TIMESTAMPS_KEY = "migrated_utc_timestamps"
+# Who the activity log names for a change made at this computer's command line
+# (reset_password, cloud_key) rather than through a dashboard sign-in.
+CLI_AUDIT_USER = "(this computer)"
+
+
+def utc_iso(value: datetime) -> str:
+    """The one stored form of an alert time: ISO 8601 in UTC.
+
+    Sensors write their own offsets (Suricata's EVE uses local time, e.g. -0400;
+    Windows events are UTC), and timestamps are compared and sorted as text. Mixed
+    offsets made a US repeat alert never count as a duplicate and put alerts out of
+    order. A time without an offset is taken as UTC, as the Windows readers mean it.
+    """
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()
+
+
+def _stored_utc(text: str) -> str | None:
+    """A stored alert time rewritten in UTC, or None when it cannot be read (left
+    as it is rather than guessed)."""
+    try:
+        value = text[:-1] + "+00:00" if text.endswith("Z") else text
+        return utc_iso(datetime.fromisoformat(value))
+    except (TypeError, ValueError):
+        return None
 
 # Compared against when the requested username does not exist, so that a failed
 # login costs one bcrypt verification either way and cannot be used to tell
@@ -220,6 +255,24 @@ class Database:
             con.execute("UPDATE triage_results SET guidance_tier=?, confidence_reasons=? WHERE alert_id=?",
                         (str(guidance_tier(row["severity"], row["confidence"], row["sensor_severity"])),
                          LEGACY_CONFIDENCE_REASONS, row["alert_id"]))
+        self._migrate_utc_timestamps(con)
+
+    def _migrate_utc_timestamps(self, con: sqlite3.Connection) -> None:
+        """Rewrite alert times stored with the sensor's own offset in UTC, once.
+
+        Parsed in Python, not SQL, so every offset form Python reads (-0400, -04:00,
+        Z) converts. Idempotent: a UTC value rewrites to itself, so the API and the
+        ingestion service starting together cannot corrupt anything; the marker only
+        saves rescanning on every start. alert_occurrences.seen_at, created_at and
+        the activity log were always written in UTC and need nothing.
+        """
+        if con.execute("SELECT 1 FROM settings WHERE key=?", (UTC_TIMESTAMPS_KEY,)).fetchone():
+            return
+        for row in con.execute("SELECT id,timestamp FROM alerts").fetchall():
+            converted = _stored_utc(row["timestamp"])
+            if converted is not None and converted != row["timestamp"]:
+                con.execute("UPDATE alerts SET timestamp=? WHERE id=?", (converted, row["id"]))
+        con.execute("INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)", (UTC_TIMESTAMPS_KEY, "1"))
 
     def _restrict_permissions(self) -> None:
         """Owner-only on the database and its WAL sidecars: it holds password hashes."""
@@ -249,7 +302,7 @@ class Database:
             cur = con.execute(
                 """INSERT INTO alerts(source,source_event_id,timestamp,title,source_ip,destination_ip,device,rule_id,mitre,raw,fingerprint,sensor_severity,created_at)
                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (alert.source, alert.source_event_id, alert.timestamp.isoformat(), alert.title, alert.source_ip,
+                (alert.source, alert.source_event_id, utc_iso(alert.timestamp), alert.title, alert.source_ip,
                  alert.destination_ip, alert.device, alert.rule_id, json.dumps(alert.mitre), json.dumps(alert.raw),
                  fingerprint(alert), str(alert.sensor_severity), now))
             alert_id = cur.lastrowid
@@ -276,6 +329,16 @@ class Database:
             rows = con.execute(f"SELECT a.id,a.source,a.timestamp,a.title,a.source_ip,a.destination_ip,a.device,a.status,a.duplicate_count,a.sensor_severity,t.severity,t.confidence,t.guidance_tier,t.explanation,t.recommended_action FROM alerts a JOIN triage_results t ON t.alert_id=a.id {where} ORDER BY a.timestamp DESC LIMIT ?", (*params, limit)).fetchall()
             return [dict(row) for row in rows]
 
+    def chat_context_alert_ids(self, limit: int) -> list[int]:
+        """Open alerts for chat context: every get-help one first, newest first, then
+        the newest of the rest. Chosen in the query itself, so a get-help alert is
+        never pushed out by a flood of newer routine ones."""
+        with self.connect() as con:
+            rows = con.execute("SELECT a.id FROM alerts a JOIN triage_results t ON t.alert_id=a.id WHERE a.status=? "
+                               "ORDER BY (t.guidance_tier IS 'get_help') DESC, a.timestamp DESC, a.id DESC LIMIT ?",
+                               (str(AlertStatus.OPEN), limit)).fetchall()
+        return [int(row["id"]) for row in rows]
+
     def get_alert(self, alert_id: int) -> AlertDetail | None:
         with self.connect() as con:
             row = con.execute("SELECT a.*,t.severity,t.explanation,t.recommended_action,t.reasoning,t.confidence,t.model_confidence,t.confidence_reasons,t.guidance_tier,t.uncertainty FROM alerts a LEFT JOIN triage_results t ON t.alert_id=a.id WHERE a.id=?", (alert_id,)).fetchone()
@@ -295,9 +358,25 @@ class Database:
         with self.connect() as con:
             return con.execute("UPDATE alerts SET status=? WHERE id=?", (status, alert_id)).rowcount == 1
 
-    def trends(self) -> list[dict[str, Any]]:
+    def change_status(self, alert_id: int, status: AlertStatus) -> str | None:
+        """update_status that also says what the status was, for the activity log.
+        None when the alert does not exist."""
         with self.connect() as con:
-            return [dict(r) for r in con.execute("SELECT substr(a.timestamp,1,10) AS day,t.severity,COUNT(*) AS count FROM alerts a JOIN triage_results t ON t.alert_id=a.id GROUP BY day,t.severity ORDER BY day")]
+            row = con.execute("SELECT status FROM alerts WHERE id=?", (alert_id,)).fetchone()
+            if row is None:
+                return None
+            con.execute("UPDATE alerts SET status=? WHERE id=?", (status, alert_id))
+            return str(row["status"])
+
+    def trends(self) -> list[dict[str, Any]]:
+        """Alert counts per local calendar day and severity. Timestamps are stored in
+        UTC, so cutting the date off the string put an evening's alerts on the next
+        day; this computer's own time zone is the owner's (API and dashboard run on
+        the same machine). A timestamp SQLite cannot read keeps its own date."""
+        with self.connect() as con:
+            return [dict(r) for r in con.execute(
+                "SELECT COALESCE(date(a.timestamp,'localtime'),substr(a.timestamp,1,10)) AS day,t.severity,COUNT(*) AS count "
+                "FROM alerts a JOIN triage_results t ON t.alert_id=a.id GROUP BY day,t.severity ORDER BY day")]
 
     def devices(self) -> list[dict[str, Any]]:
         """Activity summary; Zeek records normally populate device with origin host."""
@@ -371,6 +450,38 @@ class Database:
                               (password_hash, 1 if must_change_password else 0, user_id))
             return cur.rowcount == 1
 
+    def user(self, user_id: int) -> dict[str, Any] | None:
+        with self.connect() as con:
+            row = con.execute("SELECT id,username,role FROM users WHERE id=?", (user_id,)).fetchone()
+        return dict(row) if row else None
+
+    def user_exists(self, username: str) -> bool:
+        with self.connect() as con:
+            return con.execute("SELECT 1 FROM users WHERE username=?", (username,)).fetchone() is not None
+
+    # The "another admin remains" check lives inside the same statement as the change,
+    # so two admins demoting or removing each other at once cannot both succeed and
+    # leave nobody able to manage the install.
+    _OTHER_ADMIN_REMAINS = "(role<>'admin' OR (SELECT COUNT(*) FROM users WHERE role='admin')>1)"
+
+    def set_role(self, user_id: int, role: str) -> bool:
+        """False when the change would leave no admin (or the user is gone)."""
+        with self.connect() as con:
+            cur = con.execute(f"UPDATE users SET role=? WHERE id=? AND (?='admin' OR {self._OTHER_ADMIN_REMAINS})",
+                              (role, user_id, role))
+            return cur.rowcount == 1
+
+    def delete_user(self, user_id: int) -> bool:
+        """Remove the account with its sessions and preferences. False when it was the
+        last admin (or is gone). The activity log keeps the username as text."""
+        with self.connect() as con:
+            cur = con.execute(f"DELETE FROM users WHERE id=? AND {self._OTHER_ADMIN_REMAINS}", (user_id,))
+            if cur.rowcount != 1:
+                return False
+            con.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+            con.execute("DELETE FROM user_settings WHERE user_id=?", (user_id,))
+            return True
+
     def user_settings(self, username: str) -> dict[str, str]:
         with self.connect() as con:
             return {r["key"]: r["value"] for r in con.execute("SELECT s.key,s.value FROM user_settings s JOIN users u ON u.id=s.user_id WHERE u.username=?", (username,))}
@@ -379,18 +490,87 @@ class Database:
         with self.connect() as con:
             con.execute("INSERT INTO user_settings(user_id,key,value) SELECT id,?,? FROM users WHERE username=? ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value", (key, value, username))
 
+    def new_alerts(self, after: int, severities: list[str], limit: int) -> tuple[int, int, list[dict[str, Any]]]:
+        """Open alerts stored after `after` with a (floored) severity in `severities`,
+        for desktop notifications: (latest alert id, how many match, newest `limit`).
+
+        Only id, severity and timestamp are selected. Titles, IPs, device names and
+        model text are attacker- or model-written and must never reach a
+        notification, so this query cannot hand them out. Everything is bounded by
+        the latest id read first, so an alert stored mid-call is left for the next
+        poll instead of being skipped when the dashboard moves its cursor on.
+        """
+        marks = ",".join("?" * len(severities))
+        with self.connect() as con:
+            latest = int(con.execute("SELECT COALESCE(MAX(id),0) FROM alerts").fetchone()[0])
+            if not severities or after >= latest:
+                return latest, 0, []
+            where = (f"FROM alerts a JOIN triage_results t ON t.alert_id=a.id "
+                     f"WHERE a.id>? AND a.id<=? AND a.status=? AND t.severity IN ({marks})")
+            params = (after, latest, str(AlertStatus.OPEN), *severities)
+            count = int(con.execute(f"SELECT COUNT(*) {where}", params).fetchone()[0])
+            rows = con.execute(f"SELECT a.id,t.severity,a.timestamp {where} ORDER BY a.id DESC LIMIT ?",
+                               (*params, limit)).fetchall()
+        return latest, count, [dict(row) for row in rows]
+
     def ai_instructions(self) -> dict[str, str]:
-        """The admin's AI notes as stored, "" for any not set. Read straight from the
+        """The admin's AI notes as stored ("" for a business note never set). Read straight from the
         database on every use: the ingestion service is a separate process from the
         API that saves them, and this is how a change reaches it without a restart."""
         with self.connect() as con:
             rows = {r["key"]: r["value"] for r in con.execute(
                 "SELECT key,value FROM settings WHERE key IN (?,?)", (AI_BUSINESS_KEY, AI_STYLE_KEY))}
-        return {"business": rows.get(AI_BUSINESS_KEY, ""), "style": rows.get(AI_STYLE_KEY, "")}
+        # Never saved: the default answer style, so every chat model answers in the
+        # same plain shape (schema.DEFAULT_ANSWER_STYLE). Saved empty stays empty.
+        return {"business": rows.get(AI_BUSINESS_KEY, ""), "style": rows.get(AI_STYLE_KEY, DEFAULT_ANSWER_STYLE)}
 
     def set_ai_instructions(self, business: str, style: str) -> None:
-        """Both notes in one transaction, so triage never sees half an update."""
+        """Both notes in one transaction, so triage never sees half an update.
+
+        A style equal to the built-in default is stored as "not set" rather than as
+        text: the dashboard saves both notes together, and freezing today's default
+        into the database would keep a later release's improved default from ever
+        reaching this install. An empty style is still stored: it means "off"."""
         with self.connect() as con:
-            con.executemany("INSERT INTO settings(key,value) VALUES(?,?) "
-                            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                            ((AI_BUSINESS_KEY, business), (AI_STYLE_KEY, style)))
+            con.execute("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                        (AI_BUSINESS_KEY, business))
+            if normalize_note(style) == normalize_note(DEFAULT_ANSWER_STYLE):
+                con.execute("DELETE FROM settings WHERE key=?", (AI_STYLE_KEY,))
+            else:
+                con.execute("INSERT INTO settings(key,value) VALUES(?,?) "
+                            "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (AI_STYLE_KEY, style))
+
+    # The activity log is append-only by design: there is no method here to edit or
+    # delete a row, and triggers in SCHEMA_SQL refuse UPDATE and DELETE outright.
+    def record_audit(self, username: str, action: AuditAction, target: object = None, detail: str | None = None) -> None:
+        with self.connect() as con:
+            con.execute("INSERT INTO audit_log(timestamp,username,action,target,detail) VALUES(?,?,?,?,?)",
+                        (datetime.now(timezone.utc).isoformat(), clean(username, AUDIT_TARGET_MAX_CHARS) or "",
+                         str(AuditAction(action)), clean(target, AUDIT_TARGET_MAX_CHARS),
+                         clean(detail, AUDIT_DETAIL_MAX_CHARS)))
+
+    def audit_entries(self, limit: int = 50, before: int | None = None) -> tuple[list[AuditEntry], bool]:
+        """Newest first; `before` is the oldest id already shown. Returns the page and
+        whether older entries remain."""
+        limit = max(1, min(int(limit), AUDIT_PAGE_MAX))
+        with self.connect() as con:
+            rows = con.execute("SELECT id,timestamp,username,action,target,detail FROM audit_log "
+                               "WHERE (? IS NULL OR id<?) ORDER BY id DESC LIMIT ?",
+                               (before, before, limit + 1)).fetchall()
+        return [AuditEntry(**dict(row)) for row in rows[:limit]], len(rows) > limit
+
+
+def record_cli_audit(path: str | os.PathLike[str], action: AuditAction, target: object = None,
+                     detail: str | None = None) -> bool:
+    """Log a command-line change (a password reset, the GenAI Studio key) in the
+    Admin page's activity log under CLI_AUDIT_USER. Never raises and never creates
+    a database: the change itself has already been made, and a log that cannot be
+    written (no database yet, a locked one, an old one without the table) must not
+    turn it into a failure. Returns whether the row was written."""
+    try:
+        if not os.path.isfile(path):
+            return False
+        Database(str(path)).record_audit(CLI_AUDIT_USER, action, target, detail)
+        return True
+    except Exception:
+        return False

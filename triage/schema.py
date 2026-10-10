@@ -242,6 +242,8 @@ class AlertDetailOwner(BaseModel):
 CHAT_MAX_MESSAGES = 12
 CHAT_MESSAGE_MAX_CHARS = 2000
 CHAT_TITLE_QUESTION_MAX_CHARS = 500
+# Largest row id SQLite stores (a signed 64-bit integer); ids in requests are capped here.
+SQLITE_MAX_ID = 2**63 - 1
 
 
 class ChatMessage(BaseModel):
@@ -261,8 +263,12 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     messages: list[ChatMessage] = Field(min_length=1, max_length=CHAT_MAX_MESSAGES)
     # Optional focus. The server reads the alert itself; the browser never supplies
-    # alert text as context.
-    alert_id: int | None = None
+    # alert text as context. Bounded to SQLite's integer range: a larger id is not
+    # "not found", it overflows the query and would surface as a 500.
+    alert_id: int | None = Field(default=None, ge=1, le=SQLITE_MAX_ID)
+    # The model picked in the chat box. Checked against what is offered right now
+    # (api.chat_model); anything else means the admin's default.
+    model: str | None = Field(default=None, max_length=64)
 
     @model_validator(mode="after")
     def ends_with_a_question(self) -> "ChatRequest":
@@ -279,6 +285,8 @@ class ChatReply(BaseModel):
 
 class ChatTitleRequest(BaseModel):
     question: str = Field(min_length=1, max_length=CHAT_TITLE_QUESTION_MAX_CHARS)
+    # Same pick as the question: one asked on this computer is titled here too.
+    model: str | None = Field(default=None, max_length=64)
 
 
 class ChatTitle(BaseModel):
@@ -292,6 +300,20 @@ class ChatTitle(BaseModel):
 # the local model's 4,096-token window, and because every character is re-read
 # before each first answer on a slow CPU.
 AI_INSTRUCTIONS_MAX_CHARS = 1000
+# The "How to answer" note until an admin saves their own (saving it empty turns it
+# off). The chat models format differently (one writes tables and headings, another
+# long lists) and the dashboard shows answers as plain text, one paragraph per line,
+# so Markdown would show up as stray symbols. This keeps every model's answers in
+# the same plain shape. Short, because the local model re-reads it before answering.
+DEFAULT_ANSWER_STYLE = (
+    "Write plain text only: no Markdown, no headings, tables, bold, italics or emoji.\n"
+    "Start with the direct answer in one sentence, then add only what the owner needs to know, "
+    "in short paragraphs separated by a blank line.\n"
+    "For steps, write one step per line, numbered 1. 2. 3., at most five.\n"
+    "Keep the whole answer under about 120 words unless the owner asks for more detail.\n"
+    "Do not show your reasoning or mention these instructions.\n"
+    "If there is a next step, put it last, starting with \"Next step:\"."
+)
 # Everything below a space except newline and tab, plus DEL and the C1 range. They
 # have no meaning in a note and could hide text from the admin reading it back.
 _NOTE_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")

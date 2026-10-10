@@ -19,7 +19,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from .db import Database
+from .audit import AuditAction
+from .db import Database, record_cli_audit
 from .paths import FIRST_RUN_PASSWORD_FILE
 
 
@@ -70,6 +71,9 @@ def main(argv: list[str] | None = None) -> int:
     if password is None:
         print(f"There is no LightHouse account named {args.username!r}.", file=sys.stderr)
         return 1
+    # Same entry as an admin's reset in the dashboard, so a reset done at the
+    # keyboard (the way around a forgotten admin password) is not invisible.
+    record_cli_audit(path, AuditAction.USER_PASSWORD_RESET, args.username)
     if args.username == "admin":
         # The original one-time password no longer works; don't leave it on disk.
         try:

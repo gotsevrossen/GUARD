@@ -6,6 +6,17 @@ $dependencyHashes = Get-Content "$PSScriptRoot\dependency-hashes.json" -Raw | Co
 $repo = (Resolve-Path "$PSScriptRoot\..\..").Path
 $build = Join-Path $repo 'build\windows'
 $stage = Join-Path $build ('payload-' + [guid]::NewGuid().ToString('N'))
+# Earlier builds' staging folders each hold a full runtime; only this build's is kept.
+# Only payload-<guid> folders directly in the repository's build\windows, removed with
+# rmdir, which deletes a junction rather than following it.
+if ((Test-Path -LiteralPath $build) -and [IO.Path]::GetFullPath($build).StartsWith($repo + '\', [StringComparison]::OrdinalIgnoreCase)) {
+    foreach ($old in @(Get-ChildItem -LiteralPath $build -Directory -Force)) {
+        if ($old.Name -notmatch '^payload-[0-9a-f]{32}$' -or $old.FullName -eq $stage) { continue }
+        if ($old.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
+        & cmd.exe /d /c rmdir /s /q $old.FullName
+        if (Test-Path -LiteralPath $old.FullName) { Write-Warning "Could not remove the old staging folder $($old.FullName)." }
+    }
+}
 New-Item -ItemType Directory -Force "$stage\runtime", "$stage\dashboard\dist", "$build\downloads" | Out-Null
 function Check-Exit { if ($LASTEXITCODE -ne 0) { throw "Command failed: $LASTEXITCODE" } }
 Push-Location $repo
@@ -24,7 +35,22 @@ try {
     # hashes. Copies, not links into uv's cache: the payload is packaged as files.
     & uv export --frozen --no-dev --no-emit-project --format requirements-txt --output-file "$build\requirements.txt" | Out-Null; Check-Exit
     & uv pip install --python 3.13 --link-mode copy --require-hashes --target "$stage\runtime\Lib\site-packages" -r "$build\requirements.txt"; Check-Exit
-    & uv pip install --python 3.13 --link-mode copy --target "$stage\runtime\Lib\site-packages" --no-deps .; Check-Exit
+    # LightHouse's own package. Built without isolation, so the build backend is the
+    # setuptools that uv.lock hashes (locked through the dev extra), installed into a
+    # throwaway build environment, not whatever PyPI serves on build day.
+    & uv export --frozen --extra dev --no-emit-project --format requirements-txt --output-file "$build\requirements-dev.txt" | Out-Null; Check-Exit
+    $backend = @(); $inBlock = $false
+    foreach ($line in @(Get-Content "$build\requirements-dev.txt")) {
+        if ($line -match '^setuptools==') { $inBlock = $true; $backend += $line }
+        elseif ($inBlock -and $line -match '^\s+--hash=') { $backend += $line }
+        else { $inBlock = $false }
+    }
+    if (!@($backend | Where-Object { $_ -match '--hash=sha256:' }).Count) { throw 'setuptools is not hash-locked in uv.lock; cannot build LightHouse without build isolation.' }
+    $backend | Set-Content "$build\build-requirements.txt" -Encoding ascii
+    $buildEnv = Join-Path $build 'build-env'
+    & uv venv --python 3.13 --clear $buildEnv | Out-Null; Check-Exit
+    & uv pip install --python "$buildEnv\Scripts\python.exe" --require-hashes -r "$build\build-requirements.txt"; Check-Exit
+    & uv pip install --python "$buildEnv\Scripts\python.exe" --link-mode copy --target "$stage\runtime\Lib\site-packages" --no-deps --no-build-isolation .; Check-Exit
     & "$stage\runtime\python.exe" -c 'import triage.main, triage.local_model, win32evtlog, uvicorn, yaml, bcrypt'; Check-Exit
     # llama.cpp ships as native DLLs inside the wheel; the model runtime is useless
     # without them. Importing also loads them, which needs the VC++ runtime and an
@@ -38,7 +64,8 @@ try {
     if ($secrets) { throw "Refusing to build: a GenAI Studio key file is in the payload: $($secrets.FullName -join ', ')" }
     $compiler = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
     if (!$compiler) {
-        & winget install --id JRSoftware.InnoSetup --exact --source winget --silent --scope user --accept-source-agreements --accept-package-agreements; Check-Exit
+        # Pinned: the compiler is part of the supply chain. Raise deliberately.
+        & winget install --id JRSoftware.InnoSetup --exact --version 6.7.3 --source winget --silent --scope user --accept-source-agreements --accept-package-agreements; Check-Exit
         $compiler = "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
     }
     # Antivirus scanning the new .exe while Inno writes its resources makes the last

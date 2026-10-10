@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from 'vitest';
-import { clip, Conversation, loadConversations, MAX_CONTENT, MAX_MESSAGES, relativeTime, retryTurns, saveConversations, toChatMessages, Turn } from './conversations';
+import { chatsKey, clip, Conversation, loadConversations, MAX_CONTENT, MAX_MESSAGES, relativeTime, retryTurns, saveConversations, toChatMessages, Turn } from './conversations';
 
-const KEY = 'lighthouse-chats';
+const LEGACY = 'lighthouse-chats';
+const USER = 'sam';
+const KEY = chatsKey(USER);
 const turn = (role: Turn['role'], text: string, local?: boolean): Turn => (local ? { role, text, local } : { role, text });
 
 describe('toChatMessages', () => {
@@ -47,7 +49,7 @@ describe('loadConversations', () => {
 
   it('loads threads stored before alertId existed', () => {
     localStorage.setItem(KEY, JSON.stringify([{ id: 'a', title: 'T', turns: [{ role: 'me', text: 'q' }], updated: 1 }]));
-    expect(loadConversations()).toEqual([{ id: 'a', title: 'T', turns: [{ role: 'me', text: 'q' }], updated: 1 }]);
+    expect(loadConversations(USER)).toEqual([{ id: 'a', title: 'T', turns: [{ role: 'me', text: 'q' }], updated: 1 }]);
   });
 
   it('keeps a valid alertId and drops a corrupt one without losing the thread', () => {
@@ -55,7 +57,7 @@ describe('loadConversations', () => {
       { id: 'a', title: 'A', turns: [], updated: 2, alertId: 7 },
       { id: 'b', title: 'B', turns: [], updated: 1, alertId: 'seven' },
     ]));
-    const [first, second] = loadConversations();
+    const [first, second] = loadConversations(USER);
     expect(first.alertId).toBe(7);
     expect(second.id).toBe('b');
     expect('alertId' in second).toBe(false);
@@ -66,7 +68,7 @@ describe('loadConversations', () => {
       { role: 'me', text: 'q' },
       { role: 'them', text: 'Chat will run on the local AI model once its evaluation is complete. Until then…' },
     ] }]));
-    expect(toChatMessages([...loadConversations()[0].turns, turn('me', 'next')])).toEqual([
+    expect(toChatMessages([...loadConversations(USER)[0].turns, turn('me', 'next')])).toEqual([
       { role: 'user', content: 'q' }, { role: 'user', content: 'next' },
     ]);
   });
@@ -76,8 +78,8 @@ describe('loadConversations', () => {
       { role: 'me', text: 'q', at: 1_700_000_000_000 },
       { role: 'them', text: 'down', local: true, at: 1_700_000_060_000 },
     ] };
-    saveConversations([chat]);
-    expect(loadConversations()).toEqual([chat]);
+    saveConversations(USER, [chat]);
+    expect(loadConversations(USER)).toEqual([chat]);
   });
 
   it('drops a turn time that is not a finite number, keeping the turn', () => {
@@ -86,14 +88,61 @@ describe('loadConversations', () => {
       { role: 'them', text: 'a', at: null },
       { role: 'me', text: 'r', at: { n: 1 } },
     ] }]));
-    const [chat] = loadConversations();
+    const [chat] = loadConversations(USER);
     expect(chat.turns).toEqual([{ role: 'me', text: 'q' }, { role: 'them', text: 'a' }, { role: 'me', text: 'r' }]);
     expect(chat.turns.some(entry => 'at' in entry)).toBe(false);
   });
 
   it('falls back to no chats when storage is corrupt', () => {
     localStorage.setItem(KEY, '{not json');
-    expect(loadConversations()).toEqual([]);
+    expect(loadConversations(USER)).toEqual([]);
+  });
+
+  it('drops only the malformed thread, keeping the rest of the history', () => {
+    localStorage.setItem(KEY, JSON.stringify([
+      { id: 'a', title: 'A', turns: [{ role: 'me', text: 'q' }], updated: 2 },
+      { id: 'b', title: 7, turns: [] },
+      null,
+      { id: 'c', title: 'C', turns: [{ role: 'robot', text: 'x' }], updated: 3 },
+      { id: 'd', title: 'D', turns: [], updated: 'soon' },
+    ]));
+    expect(loadConversations(USER).map(chat => chat.id)).toEqual(['a', 'd']);
+    expect(loadConversations(USER)[1].updated).toBe(0);
+  });
+});
+
+describe('chats per user', () => {
+  beforeEach(() => localStorage.clear());
+  const thread = (id: string): Conversation => ({ id, title: id, turns: [{ role: 'me', text: 'q' }], updated: 1 });
+
+  it('keeps each user’s chats apart', () => {
+    saveConversations('sam', [thread('s1')]);
+    saveConversations('alex', [thread('a1')]);
+    expect(loadConversations('sam').map(chat => chat.id)).toEqual(['s1']);
+    expect(loadConversations('alex').map(chat => chat.id)).toEqual(['a1']);
+    expect(localStorage.getItem('lighthouse-chats:sam')).not.toBeNull();
+  });
+
+  it('moves the old shared list to the first user who loads it, and only to them', () => {
+    localStorage.setItem(LEGACY, JSON.stringify([thread('old')]));
+    expect(loadConversations('sam').map(chat => chat.id)).toEqual(['old']);
+    expect(localStorage.getItem(LEGACY)).toBeNull();
+    expect(loadConversations('alex')).toEqual([]);
+    expect(loadConversations('sam').map(chat => chat.id)).toEqual(['old']);
+  });
+
+  it('adds the old list to a user who already has chats, without duplicates', () => {
+    saveConversations('sam', [thread('mine')]);
+    localStorage.setItem(LEGACY, JSON.stringify([thread('old'), thread('mine')]));
+    expect(loadConversations('sam').map(chat => chat.id).sort()).toEqual(['mine', 'old']);
+    expect(localStorage.getItem(LEGACY)).toBeNull();
+  });
+
+  it('drops a corrupt old list instead of passing it on', () => {
+    saveConversations('sam', [thread('mine')]);
+    localStorage.setItem(LEGACY, '{not json');
+    expect(loadConversations('sam').map(chat => chat.id)).toEqual(['mine']);
+    expect(localStorage.getItem(LEGACY)).toBeNull();
   });
 });
 

@@ -119,8 +119,8 @@ def test_model_choice(tmp_path, monkeypatch):
     monkeypatch.setenv("LIGHTHOUSE_GENAI_KEY_FILE", str(tmp_path / "genai-key.bin"))
     monkeypatch.delenv("LIGHTHOUSE_GENAI_MODEL", raising=False)
     assert cloud_model.genai_model_name() == "gpt-oss:120b"
-    (tmp_path / "genai.json").write_text(json.dumps({"model": "llama3.3:70b"}), encoding="utf-8")
-    assert cloud_model.genai_model_name() == "llama3.3:70b"
+    (tmp_path / "genai.json").write_text(json.dumps({"model": "llama4:latest"}), encoding="utf-8")
+    assert cloud_model.genai_model_name() == "llama4:latest"
     monkeypatch.setenv("LIGHTHOUSE_GENAI_MODEL", "other:7b")
     assert cloud_model.genai_model_name() == "other:7b"
 
@@ -164,15 +164,15 @@ def test_provider_route_and_wrapping(api, tmp_path, monkeypatch):
     monkeypatch.setattr(api, "_local_chat_model", LocalModel())
     monkeypatch.setattr(cloud_key, "load", lambda path=None: KEY if (tmp_path / "genai-key.bin").is_file() else None)
     assert client.get("/api/chat/provider").status_code in (401, 403)
-    assert client.get("/api/chat/provider", headers=headers).json() == {"provider": "local"}
+    assert client.get("/api/chat/provider", headers=headers).json()["provider"] == "local"
     (tmp_path / "genai-key.bin").write_bytes(b"encrypted")
     response = client.get("/api/chat/provider", headers=headers)
-    assert response.json() == {"provider": "purdue"} and KEY not in response.text
+    assert response.json()["provider"] == "purdue" and KEY not in response.text
     assert isinstance(api.chat_model(), PurdueChatModel)
     # `cloud_key clear` without a restart: questions stop going out at once, and the
     # footer says so (the cached model held the key in memory).
     (tmp_path / "genai-key.bin").unlink()
-    assert client.get("/api/chat/provider", headers=headers).json() == {"provider": "local"}
+    assert client.get("/api/chat/provider", headers=headers).json()["provider"] == "local"
     assert not isinstance(api.chat_model(), PurdueChatModel)
     # With a stored key, chat is wrapped; without one, the local model is used as is.
     local = LocalModel()
@@ -205,7 +205,7 @@ def test_only_admins_choose_the_chat_model_from_the_curated_list(api, tmp_path, 
     monkeypatch.setattr(api, "_local_chat_model", LocalModel())
     assert client.put("/api/chat/model", headers=admin, json={"model": "gemma4:26b-a4b"}).status_code == 200
     assert json.loads((tmp_path / "genai.json").read_text(encoding="utf-8")) == {"model": "gemma4:26b-a4b"}
-    assert client.get("/api/chat/provider", headers=owner).json() == {"provider": "purdue"}
+    assert client.get("/api/chat/provider", headers=owner).json()["provider"] == "purdue"
     # A model pinned by the service setting cannot be "switched" here: the dashboard
     # would claim "On this computer only" while questions still went out.
     monkeypatch.setenv("LIGHTHOUSE_GENAI_MODEL", "gpt-oss:120b")
@@ -237,7 +237,109 @@ def test_switching_takes_effect_without_a_restart(api, tmp_path, monkeypatch):
     # "On this computer only": nothing goes out, and the loaded local model is reused.
     assert client.put("/api/chat/model", headers=admin, json={"model": "local"}).status_code == 200
     assert api.chat_model() is local
-    assert client.get("/api/chat/provider", headers=admin).json() == {"provider": "local"}
-    assert client.put("/api/chat/model", headers=admin, json={"model": "llama3.3:70b"}).status_code == 200
+    assert client.get("/api/chat/provider", headers=admin).json()["provider"] == "local"
+    assert client.put("/api/chat/model", headers=admin, json={"model": "llama4:latest"}).status_code == 200
     switched = api.chat_model()
-    assert isinstance(switched, PurdueChatModel) and switched.model == "llama3.3:70b" and switched.local is local
+    assert isinstance(switched, PurdueChatModel) and switched.model == "llama4:latest" and switched.local is local
+
+
+def test_the_chat_box_may_pick_a_model_per_question(api, tmp_path, monkeypatch):
+    client = TestClient(api.app)
+    owner, admin = login_as(api, client, "owner1", "owner"), login_as(api, client, "boss", "admin")
+    local = LocalModel()
+    monkeypatch.setattr(api, "_local_chat_model", local)
+    monkeypatch.setattr(cloud_key, "load", lambda path=None: KEY if (tmp_path / "genai-key.bin").is_file() else None)
+    # No key stored: nothing to pick, and a forged pick still stays on this computer.
+    options = client.get("/api/chat/provider", headers=owner).json()
+    assert options == {"provider": "local", "choices": [], "current": "local"}
+    assert api.chat_model("gpt-oss:120b") is local
+    (tmp_path / "genai-key.bin").write_bytes(b"encrypted")
+    options = client.get("/api/chat/provider", headers=owner).json()
+    assert [choice["label"] for choice in options["choices"]] == ["Thinking", "Balanced", "Quick", "Local (slow)"]
+    assert options["current"] == "gpt-oss:120b" and KEY not in json.dumps(options)
+    # Each pick answers with that model around the one local runtime; the default
+    # and anything off the list are the admin's default model.
+    default = api.chat_model()
+    assert api.chat_model("gpt-oss:120b") is default and api.chat_model("deepseek-r1:32b") is default
+    quick = api.chat_model("gemma4:26b-a4b")
+    assert isinstance(quick, PurdueChatModel) and quick.model == "gemma4:26b-a4b" and quick.local is local
+    assert api.chat_model("gemma4:26b-a4b") is quick, "cached, so its pause after a failure holds"
+    assert api.chat_model("local") is local
+    # The admin keeping chat on this computer turns every online pick off.
+    assert client.put("/api/chat/model", headers=admin, json={"model": "local"}).status_code == 200
+    assert client.get("/api/chat/provider", headers=owner).json()["choices"] == []
+    assert api.chat_model("gemma4:26b-a4b") is local
+    # So does a model pinned by the service setting.
+    assert client.put("/api/chat/model", headers=admin, json={"model": "gpt-oss:120b"}).status_code == 200
+    monkeypatch.setenv("LIGHTHOUSE_GENAI_MODEL", "llama4:latest")
+    assert client.get("/api/chat/provider", headers=owner).json()["choices"] == []
+    assert api.chat_model("gemma4:26b-a4b").model == "llama4:latest"
+
+
+def test_an_undecryptable_key_file_means_local_everywhere(api, tmp_path, monkeypatch):
+    """A key file copied from another computer (or damaged) exists but cannot be
+    decrypted: no online picker, and every route says local, because it is."""
+    client = TestClient(api.app)
+    owner, admin = login_as(api, client, "owner1", "owner"), login_as(api, client, "boss", "admin")
+    local = LocalModel()
+    monkeypatch.setattr(api, "_local_chat_model", local)
+    monkeypatch.delenv("LIGHTHOUSE_GENAI_MODEL", raising=False)
+    key_file = tmp_path / "genai-key.bin"
+    key_file.write_bytes(b"from another computer")
+    monkeypatch.setattr(cloud_key, "load", lambda path=None: None)
+    assert client.get("/api/chat/provider", headers=owner).json() == {"provider": "local", "choices": [], "current": "local"}
+    models = client.get("/api/chat/models", headers=admin).json()
+    assert models["current"] == "local" and models["key_configured"] is False
+    assert client.put("/api/chat/model", headers=admin, json={"model": "gemma4:26b-a4b"}).status_code == 409
+    assert api.chat_model("gpt-oss:120b") is local
+    # Replacing the key file (new mtime/size) is noticed without a restart.
+    monkeypatch.setattr(cloud_key, "load", lambda path=None: KEY)
+    key_file.write_bytes(b"a working key, re-encrypted here")
+    assert client.get("/api/chat/provider", headers=owner).json()["provider"] == "purdue"
+
+
+def test_both_routes_agree_on_the_current_model(api, tmp_path, monkeypatch):
+    client = TestClient(api.app)
+    owner, admin = login_as(api, client, "owner1", "owner"), login_as(api, client, "boss", "admin")
+    monkeypatch.setattr(api, "_local_chat_model", LocalModel())
+    monkeypatch.delenv("LIGHTHOUSE_GENAI_MODEL", raising=False)
+    monkeypatch.setattr(cloud_key, "load", lambda path=None: KEY if (tmp_path / "genai-key.bin").is_file() else None)
+
+    def both():
+        return (client.get("/api/chat/provider", headers=owner).json()["current"],
+                client.get("/api/chat/models", headers=admin).json()["current"])
+    # No key: the old models route said gpt-oss while the provider route said local.
+    assert both() == ("local", "local")
+    (tmp_path / "genai-key.bin").write_bytes(b"encrypted")
+    assert both() == ("gpt-oss:120b", "gpt-oss:120b")
+    # A model chosen with `cloud_key model` (no dashboard call) applies without a restart.
+    cloud_key.save_model("llama4:latest", tmp_path / "genai.json")
+    assert both() == ("llama4:latest", "llama4:latest")
+    assert api.chat_model().model == "llama4:latest"
+    cloud_key.save_model("local", tmp_path / "genai.json")
+    assert both() == ("local", "local")
+
+
+def test_a_picked_model_answers_the_question(api, tmp_path, monkeypatch):
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content)["model"])
+        return httpx.Response(200, json={"choices": [{"message": {"content": "Remote answer"}}]})
+
+    client = TestClient(api.app)
+    owner = login_as(api, client, "owner1", "owner")
+    local = LocalModel()
+    monkeypatch.setattr(api, "_local_chat_model", local)
+    monkeypatch.setattr(cloud_key, "load", lambda path=None: KEY)
+    (tmp_path / "genai-key.bin").write_bytes(b"encrypted")
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(PurdueChatModel, "_client",
+                        lambda self: httpx.AsyncClient(base_url=GENAI_BASE_URL, transport=transport))
+    question = {"messages": [{"role": "user", "content": "Hi"}]}
+    assert client.post("/api/chat", headers=owner, json={**question, "model": "gemma4:26b-a4b"}).json()["reply"] == "Remote answer"
+    assert seen == ["gemma4:26b-a4b"]
+    assert client.post("/api/chat", headers=owner, json={**question, "model": "local"}).json()["reply"] == "local answer"
+    assert seen == ["gemma4:26b-a4b"] and local.chats == 1
+    assert client.post("/api/chat", headers=owner, json={**question, "model": "x" * 65}).status_code == 422
+

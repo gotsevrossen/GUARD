@@ -142,6 +142,60 @@ def test_wrong_current_password_does_not_change_anything(api, client):
     assert login(client, "analyst1", ANALYST_PASSWORD)
 
 
+def test_forced_change_must_pick_a_different_password(api, client):
+    """A forced change exists because someone else knows the old password."""
+    api.db.create_user("owner1", OWNER_PASSWORD, "owner", must_change_password=True)
+    token = login(client, "owner1", OWNER_PASSWORD)
+    same = client.post("/api/auth/password", headers=auth(token),
+                       json={"current_password": OWNER_PASSWORD, "new_password": OWNER_PASSWORD})
+    assert same.status_code == 422 and "different" in same.json()["detail"]
+    assert client.get("/api/alerts", headers=auth(token)).status_code == 403, "still owes the change"
+    # A wrong current password is still a 401 even when both fields match: no oracle.
+    wrong = client.post("/api/auth/password", headers=auth(token),
+                        json={"current_password": "not-the-password", "new_password": "not-the-password"})
+    assert wrong.status_code == 401
+    changed = client.post("/api/auth/password", headers=auth(token),
+                          json={"current_password": OWNER_PASSWORD, "new_password": "a-brand-new-password"})
+    assert changed.status_code == 200
+    assert client.get("/api/alerts", headers=auth(token)).status_code == 200
+
+
+def test_preferences_take_only_known_values(api, client):
+    api.db.create_user("owner1", OWNER_PASSWORD, "owner")
+    token = login(client, "owner1", OWNER_PASSWORD)
+    for value in ("relaxed", "balanced", "strict"):
+        response = client.put("/api/preferences", headers=auth(token), json={"key": "alert_sensitivity", "value": value})
+        assert response.status_code == 200, value
+    for value in ("paranoid", "", "x" * 10_000):
+        response = client.put("/api/preferences", headers=auth(token), json={"key": "alert_sensitivity", "value": value})
+        assert response.status_code == 422, value[:20]
+    too_long_key = client.put("/api/preferences", headers=auth(token), json={"key": "k" * 1000, "value": "high"})
+    assert too_long_key.status_code == 422
+    assert client.get("/api/preferences", headers=auth(token)).json() == {"alert_sensitivity": "strict"}
+
+
+@pytest.mark.parametrize("method,path,body", [
+    ("get", "/api/alerts/{big}", None),
+    ("patch", "/api/alerts/{big}/status", {"status": "resolved"}),
+    ("get", "/api/alerts/0", None),
+    ("post", "/api/chat", {"messages": [{"role": "user", "content": "hi"}], "alert_id": "{big}"}),
+    ("post", "/api/chat/stream", {"messages": [{"role": "user", "content": "hi"}], "alert_id": "{big}"}),
+    ("post", "/api/chat/warm", {"alert_id": "{big}"}),
+    ("post", "/api/chat/warm", {"alert_id": 0}),
+    ("patch", "/api/users/{big}/role", {"role": "owner"}),
+    ("get", "/api/admin/activity?before={big}", None),
+])
+def test_oversized_ids_are_a_422_not_a_500(api, client, method, path, body):
+    big = 10**20
+    api.db.create_user("boss", ADMIN_PASSWORD, "admin")
+    token = login(client, "boss", ADMIN_PASSWORD)
+    if body is not None:
+        body = {key: big if value == "{big}" else value for key, value in body.items()}
+    response = getattr(client, method)(path.format(big=big), headers=auth(token),
+                                       **({"json": body} if body is not None else {}))
+    assert response.status_code == 422, response.text
+
+
 def test_admin_reset_revokes_sessions_and_forces_a_change(api, client):
     api.db.create_user("boss", ADMIN_PASSWORD, "admin")
     api.db.create_user("analyst1", ANALYST_PASSWORD, "analyst")

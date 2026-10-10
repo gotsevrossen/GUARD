@@ -128,11 +128,31 @@ function Assert-InstallVolume([string]$Path) {
     $full = [IO.Path]::GetFullPath($Path).TrimEnd('\')
     if ($full.Length -le 2) { throw "Choose a folder for LightHouse, not the root of drive $($volume.Root)" }
 }
+function Assert-TrustedTree([string]$Path, [string[]]$Except = @()) {
+    # Every item, not only the root: a file's owner may always rewrite its DACL, so a
+    # planted file still owned by its planter could be reopened after any reset (a
+    # DLL beside suricata.exe, which runs as LocalSystem). Top-level names in $Except
+    # (the private data folder) are checked by their own, stricter protection.
+    $queue = New-Object 'Collections.Generic.Queue[IO.FileSystemInfo]'
+    $queue.Enqueue((Get-Item -LiteralPath $Path -Force))
+    $root = $true
+    while ($queue.Count) {
+        $item = $queue.Dequeue()
+        Assert-TrustedItem $item
+        if ($item.PSIsContainer) {
+            foreach ($child in @(Get-ChildItem -LiteralPath $item.FullName -Force)) {
+                if ($root -and $child.Name -in $Except) { continue }
+                $queue.Enqueue($child)
+            }
+        }
+        $root = $false
+    }
+}
 function Protect-AppDirectory([string]$Path, [string[]]$Except = @()) {
-    # Lock the root, then make everything below it inherit from it, replacing any
-    # explicit grant (an older install, or a folder someone prepared in advance).
-    # Subfolders named in $Except (the private data folder) are left to their own
-    # stricter protection.
+    # Lock the root, then give everything below it to Administrators and make it
+    # inherit from the root, replacing any explicit grant (an older install, or a
+    # folder someone prepared in advance). Subfolders named in $Except (the private
+    # data folder) are left to their own stricter protection.
     $full = [IO.Path]::GetFullPath($Path)
     $ancestor = [IO.DirectoryInfo]$full
     while ($null -ne $ancestor) {
@@ -143,10 +163,44 @@ function Protect-AppDirectory([string]$Path, [string[]]$Except = @()) {
     foreach ($child in @(Get-ChildItem -LiteralPath $full -Force)) {
         if ($child.Name -in $Except) { continue }
         if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Reparse points are not permitted: $($child.FullName)" }
+        # Owner first: resetting the DACL alone leaves a planted file's owner able to
+        # reopen it.
+        & icacls.exe $child.FullName /setowner '*S-1-5-32-544' /T /C /Q | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Could not take ownership of $($child.FullName) (icacls $LASTEXITCODE)" }
         & icacls.exe $child.FullName /reset /T /C /Q | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "Could not reset permissions on $($child.FullName) (icacls $LASTEXITCODE)" }
     }
-    Assert-TrustedItem (Get-Item -LiteralPath $full -Force)
+    # Checked afterwards, item by item, so nothing changed in between goes unnoticed.
+    Assert-TrustedTree $full $Except
+}
+function Test-PathInside([string]$Path, [string]$Folder) {
+    $full = [IO.Path]::GetFullPath($Path).TrimEnd('\')
+    $parent = [IO.Path]::GetFullPath($Folder).TrimEnd('\')
+    return $full.StartsWith($parent + '\', [StringComparison]::OrdinalIgnoreCase)
+}
+function Assert-SuricataLocation([string]$Path, [string]$AppDir, [string]$DataDir) {
+    # SuricataDir is operator-configurable, and its whole tree is about to get the
+    # program folder's permissions (Users may read): refuse anything that is not a
+    # folder of its own, and anything in or around the private data folder.
+    $full = [IO.Path]::GetFullPath($Path).TrimEnd('\')
+    $app = [IO.Path]::GetFullPath($AppDir).TrimEnd('\')
+    $data = [IO.Path]::GetFullPath($DataDir).TrimEnd('\')
+    $volume = Get-InstallVolume $full
+    if ($volume.DriveType -ne 'Fixed' -or $volume.DriveFormat -notin @('NTFS', 'ReFS')) { throw "SuricataDir ($full) must be on an internal NTFS drive." }
+    if ($full.Length -le 2) { throw "SuricataDir must be a folder, not the root of drive $($volume.Root)." }
+    if ($full -eq $app -or (Test-PathInside $app $full)) { throw "SuricataDir ($full) must not be or contain the LightHouse folder." }
+    if ($full -eq $data -or (Test-PathInside $full $data) -or (Test-PathInside $data $full)) { throw "SuricataDir ($full) must be outside the LightHouse data folder." }
+}
+function Protect-SuricataDirectory([string]$Path, [string]$AppDir, [string]$DataDir) {
+    # suricata.exe and every DLL beside it run as LocalSystem, so its folder gets the
+    # program folder's protection (owner included) wherever it is. The default,
+    # <app>\Suricata, already inherits it; a folder elsewhere (an operator's choice)
+    # would otherwise keep its drive's defaults, and C:\ and other drive roots let
+    # every signed-in user add files to new folders.
+    Assert-SuricataLocation $Path $AppDir $DataDir
+    $full = [IO.Path]::GetFullPath($Path).TrimEnd('\')
+    if (!(Test-Path -LiteralPath $full)) { [IO.Directory]::CreateDirectory($full, (New-AppAcl $true)) | Out-Null }
+    Protect-AppDirectory $full
 }
 function Get-TreeSize([string]$Path) {
     $sum = (Get-ChildItem -LiteralPath $Path -Recurse -Force -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum

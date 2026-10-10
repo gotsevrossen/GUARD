@@ -17,7 +17,8 @@ from triage.llm import (ADMIN_NOTES_CLOSE, ADMIN_NOTES_OPEN, CHAT_HISTORY_MAX_CH
                         EVIDENCE_OPEN, SYSTEM_PROMPT, TriageModel, build_prompt, compose_chat_system_prompt,
                         compose_triage_system_prompt, history_budget)
 from triage.local_model import LlamaCppSettings, LlamaCppTriageModel, SMOKE_TEST_ALERT
-from triage.schema import AI_INSTRUCTIONS_MAX_CHARS, NormalizedAlert, Severity, Source, TriageResult
+from triage.schema import (AI_INSTRUCTIONS_MAX_CHARS, DEFAULT_ANSWER_STYLE, NormalizedAlert, Severity, Source, TriageResult,
+                           normalize_note)
 from triage.service import TriageService
 
 KEY = "sk-TEST-KEY-never-printed-0123456789"
@@ -96,12 +97,14 @@ def test_only_admins_read_or_change_the_instructions(api, client):
         headers = login_as(api, client, f"{role}1", role)
         assert client.get(PATH, headers=headers).status_code == 403
         assert client.put(PATH, headers=headers, json=body).status_code == 403
-    assert api.db.ai_instructions() == {"business": "", "style": ""}
+    assert api.db.ai_instructions() == {"business": "", "style": DEFAULT_ANSWER_STYLE}
 
 
 def test_admin_round_trip_is_normalized(api, client):
     admin = login_as(api, client, "boss", "admin")
-    assert client.get(PATH, headers=admin).json() == {"business": "", "style": "", "max_chars": 1000}
+    # Until an admin saves their own, the default answer style keeps every chat
+    # model's answers in the same plain shape.
+    assert client.get(PATH, headers=admin).json() == {"business": "", "style": DEFAULT_ANSWER_STYLE, "max_chars": 1000}
     response = client.put(PATH, headers=admin, json={
         "business": "  Dental office\r\nFront desk\x00 PC\x07\rholds\trecords\x1b\u0085  \r\n",
         "style": "\r\n\t Use bullets. \r\n"})
@@ -115,13 +118,31 @@ def test_admin_round_trip_is_normalized(api, client):
     assert cleared.json() == {"business": "", "style": "", "max_chars": 1000}
 
 
+def test_saving_the_default_style_keeps_following_future_defaults(api, client, monkeypatch):
+    """The dashboard saves both notes together. Storing today's default as text would
+    freeze it, so a later release's better default never reached this install."""
+    import triage.db as db_module
+    admin = login_as(api, client, "boss", "admin")
+    saved = client.put(PATH, headers=admin, json={"business": BUSINESS, "style": DEFAULT_ANSWER_STYLE + "\r\n"})
+    assert saved.json() == {"business": BUSINESS, "style": DEFAULT_ANSWER_STYLE, "max_chars": 1000}
+    with api.db.connect() as con:
+        assert con.execute("SELECT 1 FROM settings WHERE key='ai_answer_style'").fetchone() is None
+    monkeypatch.setattr(db_module, "DEFAULT_ANSWER_STYLE", "A newer default.")
+    assert api.db.ai_instructions() == {"business": BUSINESS, "style": "A newer default."}
+    # An admin's own style, or turning it off, is still stored as given.
+    client.put(PATH, headers=admin, json={"business": BUSINESS, "style": ""})
+    assert api.db.ai_instructions()["style"] == ""
+    client.put(PATH, headers=admin, json={"business": BUSINESS, "style": STYLE})
+    assert api.db.ai_instructions()["style"] == STYLE
+
+
 def test_over_the_limit_is_a_422_but_the_limit_applies_after_normalizing(api, client):
     admin = login_as(api, client, "boss", "admin")
     limit = "x" * AI_INSTRUCTIONS_MAX_CHARS
     for body in ({"business": limit + "y", "style": ""}, {"business": "", "style": limit + "y"},
                  {"business": "fine"}, {"business": 5, "style": ""}):
         assert client.put(PATH, headers=admin, json=body).status_code == 422, body
-    assert api.db.ai_instructions() == {"business": "", "style": ""}
+    assert api.db.ai_instructions() == {"business": "", "style": DEFAULT_ANSWER_STYLE}
     response = client.put(PATH, headers=admin, json={"business": f"\r\n {limit} \r\n\x00", "style": limit})
     assert response.status_code == 200 and response.json()["business"] == limit
 
@@ -251,7 +272,7 @@ def test_every_chat_entry_point_uses_the_same_composed_prompt(api, client, monke
     question = {"messages": [{"role": "user", "content": "Is my network ok?"}]}
 
     assert client.post("/api/chat", headers=owner, json=question).status_code == 200
-    assert model.systems[-1] == CHAT_SYSTEM_PROMPT
+    assert model.systems[-1] == compose_chat_system_prompt("", DEFAULT_ANSWER_STYLE)
 
     client.put(PATH, headers=admin, json={"business": BUSINESS, "style": STYLE})
     expected = compose_chat_system_prompt(BUSINESS, STYLE)
@@ -288,7 +309,7 @@ def test_genai_studio_receives_the_same_composed_chat_prompt(api, client, tmp_pa
     monkeypatch.setattr(cloud_key, "load", lambda path=None: KEY)
     monkeypatch.setattr(api, "_local_chat_model", local)
     monkeypatch.setattr(api, "_chat_model", PurdueChatModel(local, KEY, transport=httpx.MockTransport(handler)))
-    monkeypatch.setattr(api, "_chat_key_stored", True)
+    monkeypatch.setattr(api, "_chat_built_for", api._genai_state())
     owner = login_as(api, client, "owner1", "owner")
     admin = login_as(api, client, "boss", "admin")
     client.put(PATH, headers=admin, json={"business": BUSINESS, "style": STYLE})
@@ -297,3 +318,8 @@ def test_genai_studio_receives_the_same_composed_chat_prompt(api, client, tmp_pa
     assert response.json() == {"reply": "Remote answer", "available": True}
     assert seen[-1]["messages"][0] == {"role": "system", "content": compose_chat_system_prompt(BUSINESS, STYLE)}
     assert local.systems == [], "GenAI Studio answered; the local model was not used"
+
+
+def test_default_answer_style_fits_and_survives_normalizing():
+    assert len(DEFAULT_ANSWER_STYLE) <= AI_INSTRUCTIONS_MAX_CHARS
+    assert normalize_note(DEFAULT_ANSWER_STYLE) == DEFAULT_ANSWER_STYLE

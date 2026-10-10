@@ -71,6 +71,21 @@ def data_dir() -> Path:
     return directory
 
 
+def install_root() -> Path | None:
+    """The Windows install folder this Python runtime belongs to
+    (`<install>\\runtime\\python.exe`), or None for any other Python (a developer's
+    copy, tests, Linux).
+
+    Every default that must follow the install folder chosen in setup comes from
+    here, never from `C:\\` or ProgramData: any user may create
+    `C:\\ProgramData\\LightHouse` and own it, and the install may be on another drive.
+    """
+    install = Path(sys.executable).resolve().parent.parent
+    if sys.platform != "win32" or not (install / "setup" / "install.ps1").is_file():
+        return None
+    return install
+
+
 def first_run_handoff_configured() -> bool:
     """True when an installer chose where the one-time password goes.
 

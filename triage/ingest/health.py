@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import sys
@@ -14,8 +15,18 @@ logger = logging.getLogger(__name__)
 
 
 def state_directory() -> Path:
-    return Path(os.getenv('LIGHTHOUSE_EVENT_STATE_DIR') or
-                Path(os.getenv('PROGRAMDATA', r'C:\ProgramData')) / 'LightHouse' / 'state')
+    """`LIGHTHOUSE_EVENT_STATE_DIR` (setup always sets it), else `<install>\\data\\state`
+    of the install this Python belongs to, else `state` in the working directory for
+    a developer's copy, like the relative default database.
+
+    Never ProgramData: any user may create `C:\\ProgramData\\LightHouse` and own it,
+    and checkpoints planted there could make the readers skip events."""
+    configured = os.getenv('LIGHTHOUSE_EVENT_STATE_DIR', '').strip()
+    if configured:
+        return Path(configured)
+    from ..paths import install_root
+    install = install_root()
+    return install / 'data' / 'state' if install is not None else Path('state')
 
 
 def channel_filename(channel: str) -> str:
@@ -91,6 +102,24 @@ def snapshot(directory=None, channels=None, *, since=0, max_age=240):
             status = 'unavailable'
         results[channel] = status
     return {'ok': all(value == 'ok' for value in results.values()), 'channels': results}
+
+
+def last_report(directory, channel) -> tuple[str, float] | None:
+    """A reader's last word on one channel: (status, unix time), or None when it
+    never wrote one, or the file is damaged or belongs to another channel.
+
+    Never raises: the owner's "Is LightHouse watching?" status must not fail
+    because a health file was cut short by a hard reset.
+    """
+    path = Path(directory) / 'health' / channel_filename(channel)
+    try:
+        value = json.loads(path.read_text(encoding='utf-8'))
+        checked, status = float(value['checked_at']), value['status']
+        if value['channel'] != channel or not isinstance(status, str) or not math.isfinite(checked):
+            return None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return status, checked
 
 
 def main():

@@ -4,10 +4,71 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>LightHouse — Dashboard Frame</title>
+  <!-- The signed-off static reference for the dashboard. Its CSS is copied verbatim
+       from dashboard/src/styles.css and sidebar.css, and its markup mirrors what the
+       React components in dashboard/src/main.tsx render, so a class name here means
+       the same thing it means in the app. Sample data only; nothing is fetched. -->
   <!-- No web fonts: this page must render identically on an air-gapped appliance,
        and a blocked font request would otherwise stall first paint. -->
   <style>
-    /* ---- LightHouse brand tokens ---- */
+    /* ---- Boot sequence (dashboard/index.html): inlined there rather than rendered by
+           React, so the green screen paints before the bundle has parsed. Here .app
+           stands in for #root. ---- */
+    .boot{position:fixed;inset:0;z-index:999;overflow:hidden;background:var(--green);
+      animation:boot-out .225s ease 2.225s forwards}
+    /* rooted to the bottom edge: it only travels straight up and translateY never
+       goes below 0, so the flat base stays planted on the bottom of the screen */
+    .boot-stage{position:absolute;left:50%;bottom:0;translate:-50% 0;
+      height:min(88vh,190vw);aspect-ratio:325/1046;
+      animation:rise .7s cubic-bezier(.2,.75,.3,1) both,lamp-out .79s ease 1.675s forwards}
+    .lh-head{position:absolute;inset:0;display:block;width:100%;height:100%}
+    /* the shaft is a straight-sided cone traced from the logo. the outer shape is
+       filled white and the striped layer is inset 2.6%, so the white left as a rim
+       reads as the tower's side walls, exactly as the logo draws them */
+    .lh-shaft{position:absolute;left:0;right:0;top:33.84%;bottom:0;background:#fff;
+      clip-path:polygon(15.7% 0,0.3% 100%,99.7% 100%,84.3% 0)}
+    .lh-stripes{position:absolute;inset:0;overflow:hidden;
+      clip-path:polygon(18.3% 0,2.9% 100%,97.1% 100%,81.7% 0)}
+    /* soft shoulders on each band so the diagonals do not read as stair-stepped */
+    .lh-stripes span{position:absolute;left:-40%;right:-40%;top:-60%;bottom:-60%;
+      background:repeating-linear-gradient(-25deg,#fff 0 6.3vh,var(--green) 6.5vh 12.6vh,#fff 12.8vh);
+      animation:barber .95s linear infinite}
+    /* one stripe period measured vertically: 12.8vh / cos(25deg) */
+    @keyframes barber{from{transform:translateY(0)}to{transform:translateY(-14.124vh)}}
+    @keyframes rise{from{opacity:0;transform:translateY(100%)}30%{opacity:1}to{opacity:1;transform:translateY(0)}}
+    /* lamp glow, sitting on the lantern */
+    .boot-stage::before{content:"";position:absolute;left:50%;top:23%;width:44vh;height:44vh;
+      translate:-50% -50%;border-radius:50%;z-index:1;
+      background:radial-gradient(circle,rgba(255,255,255,.3),rgba(255,255,255,0) 62%)}
+    /* zero-size anchor on the lantern; every beam pivots from this point */
+    .beams{position:absolute;left:50%;top:23%;width:0;height:0;z-index:2}
+    /* the wrapper carries the fixed angle, the inner element does the animating,
+       so the keyframes only touch opacity and scaleY */
+    .beams i{position:absolute;left:0;bottom:0;width:17vmax;height:100vmax;
+      transform-origin:50% 100%;transform:translateX(-50%) rotate(var(--a))}
+    .beams b{position:absolute;inset:0;transform-origin:50% 100%;opacity:0;filter:blur(4px);
+      background:linear-gradient(to top,rgba(255,255,255,.85),rgba(255,255,255,.38) 40%,rgba(255,255,255,0) 100%);
+      clip-path:polygon(50% 100%,0 0,100% 0);
+      animation:beam 1.01s ease-out both;animation-delay:var(--d)}
+    @keyframes beam{0%{opacity:0;transform:scaleY(.12)}30%{opacity:1}100%{opacity:0;transform:scaleY(1)}}
+    @keyframes lamp-out{to{opacity:0}}
+    @keyframes boot-out{to{opacity:0;visibility:hidden}}
+    .app{animation:app-in .25s ease 2.25s both}
+    @keyframes app-in{from{opacity:0}to{opacity:1}}
+    /* already booted this session: straight to the app, no green screen */
+    html.booted .boot{display:none}
+    html.booted .app{animation:none}
+    @media (prefers-reduced-motion:reduce){
+      .boot{display:none}
+      .app,.boot-stage,.beams b,.lh-stripes span{animation:none}
+    }
+
+    /* ======== dashboard/src/styles.css (verbatim) ======== */
+    /* LightHouse application frame.
+       The tokens, geometry and type scale here are the dashboard frame the design was
+       signed off on: a flat green rail with a content sheet lapping over its right
+       edge. Sidebar-specific rules live in sidebar.css. */
+
     :root{
       --green:#2A9679; --green-dark:#217a61; --green-deep:#186049;
       --ink:#000; --paper:#fff; --ground:#E9E9E9;
@@ -21,36 +82,10 @@
       color:var(--ink); background:var(--ground);
     }
     *{box-sizing:border-box} body{margin:0;background:var(--ground)}
+
     /* the shell itself never scrolls, so the lapped corners stay put */
     .app{display:grid;grid-template-columns:300px 1fr;height:100vh;overflow:hidden;
       transition:grid-template-columns .18s ease}
-
-    /* ---- Sidebar: flat green panel; the content sheet laps over it ---- */
-    aside{height:100vh;display:flex;flex-direction:column;
-      /* right padding clears the content sheet that laps over this edge */
-      padding:22px 56px 28px 20px;color:#eafff6;background:var(--green)}
-    /* the toggle wears a nav item's shape, size and hover, and its glyph sits on the
-       same 45px centre line as the nav icons, so it reads as part of that column */
-    .rail-top{display:flex;justify-content:flex-start;padding-left:3px;margin-bottom:4px}
-    .collapse{display:grid;place-items:center;width:44px;height:44px;border:0;
-      border-radius:var(--r-sm);background:transparent;color:#d8f3e9;
-      font-size:1.05rem;font-weight:700;line-height:1;cursor:pointer;
-      transition:background .15s ease,color .15s ease}
-    .collapse:hover{background:rgba(255,255,255,.14);color:#fff}
-    .brand{display:flex;align-items:center;gap:13px;padding:0 4px 28px}
-    .brand img{flex:0 0 auto;width:64px;height:64px;border-radius:50%;background:#fff;
-      object-fit:cover;transition:width .18s ease,height .18s ease}
-    .brand .txt{min-width:0}
-    .brand b{display:block;color:#fff;font-size:1.15rem;font-weight:700;letter-spacing:-.01em;line-height:1.1}
-    .brand span{display:block;font-size:.7rem;font-weight:400;letter-spacing:.02em;color:#cdeee2}
-
-    nav button{display:flex;align-items:center;width:100%;margin:3px 0;padding:12px 14px;border:0;
-      border-radius:var(--r-sm);background:transparent;color:#d8f3e9;text-align:left;font:inherit;
-      font-size:.9rem;font-weight:500;cursor:pointer;transition:background .15s ease,color .15s ease}
-    nav button:hover{background:rgba(255,255,255,.14);color:#fff}
-    nav button.active{background:#fff;color:var(--green-deep);font-weight:600}
-    .nav-icon{display:inline-grid;width:22px;place-items:center;margin-right:11px;font-size:1.05rem;font-weight:700}
-    .bottom{margin-top:auto;padding-top:14px;border-top:1px solid rgba(255,255,255,.28)}
 
     /* ---- Main: the sheet laps over the sidebar. Only .sheet scrolls, so the
            rounded left edge and the composer below it never move ---- */
@@ -63,7 +98,8 @@
        capped and centred inside, so collapsing the rail does not shift it left */
     .sheet{min-height:0;overflow-y:auto;overscroll-behavior:contain;
       padding:56px 88px 28px 96px}
-    .sheet>*,.dock form,.dock small{max-width:1020px;margin-left:auto;margin-right:auto}
+    .sheet>*,.dock form,.dock>small{max-width:1020px;margin-left:auto;margin-right:auto}
+
     .eyebrow{margin:0 0 10px;color:var(--ink);font-size:.68rem;font-weight:600;letter-spacing:.16em;text-transform:uppercase}
     h1{margin:0 0 14px;font-size:clamp(2.2rem,4.4vw,3.6rem);font-weight:800;line-height:.98;
       letter-spacing:-.035em;text-transform:uppercase}
@@ -71,8 +107,6 @@
     h3{margin:26px 0 8px;font-size:.95rem;font-weight:600;letter-spacing:-.01em}
     p{line-height:1.55}
     .muted,small{color:var(--muted)}
-    .page{display:none}
-    .page.on{display:block}
     .lede{max-width:620px;color:var(--muted);margin:0 0 4px}
 
     .welcome{padding-bottom:26px;border-bottom:1px solid var(--line)}
@@ -80,6 +114,15 @@
     .health{display:flex;align-items:center;gap:10px;margin-top:20px;font-size:.95rem}
     .health i,.dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--green)}
     .health i.warn{background:var(--sev-high)}
+    /* paused monitoring: grey, never the reassuring green */
+    .health i.off{background:var(--muted)}
+    .health .btn{margin-left:auto}
+    .health .btn+.btn{margin-left:8px}
+
+    /* update prompt: a native modal dialog styled as one of the frame's white cards */
+    dialog.update{max-width:460px;padding:28px 30px;border:0;border-radius:var(--r-md);background:var(--paper);color:var(--ink)}
+    dialog.update::backdrop{background:color-mix(in srgb,var(--ink) 35%,transparent)}
+    dialog.update p:not(.eyebrow){color:var(--muted);line-height:1.55}
     .health small{margin-left:6px}
 
     .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:28px 0}
@@ -105,7 +148,12 @@
     .alert[open]{border-bottom-color:transparent;background:var(--paper);border-radius:var(--r-md);margin:6px 0}
     .alert[open] summary{background:transparent;padding:22px 22px 10px}
     .alert summary b{display:block;font-weight:600}
-    .alert summary p{margin:4px 0 0;color:var(--muted);font-size:.88rem}
+    /* the closed row keeps to two lines however long the model's explanation ran; the
+       full text is right below it under "What this means" */
+    .alert summary p{margin:4px 0 0;color:var(--muted);font-size:.88rem;overflow:hidden;
+      display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2}
+    /* open, the same text is right below under "What this means", so the row drops it */
+    .alert[open] summary p{display:none}
     .alert .when{margin-left:auto;padding-left:16px;text-align:right;white-space:nowrap;font-size:.78rem;color:var(--muted)}
     .alert .chev{flex:0 0 auto;width:18px;margin:3px 0 0 12px;text-align:center;color:var(--muted);
       font-size:.8rem;line-height:1;transition:transform .18s ease}
@@ -122,13 +170,13 @@
     .dot{margin-top:7px}
     .dot.low{background:var(--sev-low)}
     .dot.medium{background:var(--sev-med)}
-    .dot.high{background:var(--sev-high)}
+    .dot.high,.dot.critical{background:var(--sev-high)}
     /* unknown is not "low": grey, never the reassuring green */
     .dot.unknown{background:var(--muted)}
     /* severity always carries its name, so colour is never the only signal */
     .sev{display:inline-block;margin-right:8px;font-size:.68rem;font-weight:600;
       letter-spacing:.1em;text-transform:uppercase;color:var(--sev-low)}
-    .sev.medium{color:#8a6314} .sev.high{color:#96342a} .sev.unknown{color:var(--muted)}
+    .sev.medium{color:#8a6314} .sev.high,.sev.critical{color:#96342a} .sev.unknown{color:var(--muted)}
     .pill{display:inline-block;padding:4px 11px;border-radius:999px;background:rgba(0,0,0,.07);
       font-size:.68rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
     .pill.get_help{margin-right:8px;background:var(--sev-high);color:#fff}
@@ -149,6 +197,9 @@
     .chips button{padding:8px 16px;border:1px solid var(--line);border-radius:999px;background:transparent;
       color:var(--ink);font:inherit;font-size:.8rem;font-weight:500;cursor:pointer}
     .chips button.on{background:var(--ink);border-color:var(--ink);color:#fff}
+    .empty-state{padding:44px 20px;text-align:center;color:var(--muted)}
+    .empty-state b{display:block;margin-bottom:6px;color:var(--ink)}
+    .empty-state p{margin:6px 0}
 
     /* ---- Prompt cards: arrow motif from the slides ---- */
     .common-questions{margin-top:38px}
@@ -160,13 +211,69 @@
     .prompt-cards button b{position:absolute;top:16px;right:18px;color:var(--green);font-size:1.1rem;font-weight:400}
     .prompt-cards button:hover b{color:#fff}
 
+    /* ---- Chat thread. Who is speaking is carried by placement and surface, never by
+           a name printed in front of the words. ---- */
+    .thread{display:flex;flex-direction:column;gap:24px;margin-top:10px}
+    .thread .turn.me{align-self:flex-end;max-width:min(620px,82%);padding:14px 18px;
+      border-radius:var(--r-md);background:var(--paper)}
+    .thread .turn.them{align-self:flex-start;max-width:72ch}
+    .thread .turn p{margin:0;font-size:.95rem;line-height:1.65}
+    .thread .turn p+p{margin-top:10px}
+    .thread .turn.them .mark{display:block;width:26px;height:26px;margin-bottom:12px;border-radius:50%;
+      background:var(--green)}
+    /* "LightHouse is replying": the speaker dot becomes a round tank of water, with
+       swells rolling through it, drops splashing off the crest and an arc running round
+       the rim like a loading ring. Brand tokens only (tints mixed from --green). The
+       swells slide exactly one period (26 user units = 26px) so the loop is seamless. */
+    .thread .turn.them .wave-mark{background:transparent;border-radius:0}
+    /* The same mark, smaller, beside "Updating" in the update dialog. It scales freely:
+       the swells move in the drawing's own 26-unit space, not screen pixels. */
+    .eyebrow.with-mark{display:flex;align-items:center;gap:8px}
+    .eyebrow.with-mark .wave-mark{display:block;width:20px;height:20px;flex:0 0 auto}
+    /* loader row: the wave mark plus a short line saying what is going on */
+    .thread .turn.them .thinking{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+    .thread .turn.them .thinking .mark{margin-bottom:0;flex:0 0 auto}
+    .thinking-words{font-size:.85rem;color:var(--muted)}
+    .wave-mark svg{display:block;width:100%;height:100%;overflow:visible}
+    .wave-mark .tank{fill:color-mix(in srgb,var(--green) 14%,var(--paper))}
+    .wave-mark .rim{fill:none;stroke:color-mix(in srgb,var(--green) 30%,transparent);stroke-width:2}
+    .wave-mark .ring{fill:none;stroke:var(--green-dark);stroke-width:2;stroke-linecap:round;
+      stroke-dasharray:24 76;transform-box:fill-box;transform-origin:50% 50%;animation:ring-turn 1.1s linear infinite}
+    .wave-mark .back path{fill:var(--green);opacity:.45}
+    .wave-mark .front path{fill:var(--green)}
+    .wave-mark .drops circle{fill:var(--green-dark);opacity:0}
+    .wave-mark .back{animation:swell 2.4s linear infinite}
+    .wave-mark .front{animation:swell 1.6s linear infinite}
+    .wave-mark .water{animation:bob 2.2s ease-in-out infinite}
+    .wave-mark .drops circle{animation:splash 1.6s ease-out infinite}
+    .wave-mark .drops circle:nth-child(1){--drift:-2px}
+    .wave-mark .drops circle:nth-child(2){--drift:.5px;animation-delay:.5s}
+    .wave-mark .drops circle:nth-child(3){--drift:2px;animation-delay:1s}
+    @keyframes swell{from{transform:translateX(0)}to{transform:translateX(-26px)}}
+    @keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-1.5px)}}
+    @keyframes ring-turn{to{transform:rotate(360deg)}}
+    @keyframes splash{
+      0%{transform:translate(0,3px);opacity:0}
+      15%{opacity:1}
+      50%{transform:translate(var(--drift),-4px);opacity:1}
+      100%{transform:translate(calc(var(--drift) * 2),3px);opacity:0}}
+
+    /* Under a finished answer: quiet icon actions and when it was written. Muted until
+       pointed at or focused, so the answer stays the thing on the page. The row starts
+       a few pixels left so the first icon lines up with the text above. */
+    .turn-actions{display:flex;align-items:center;gap:2px;margin:8px 0 0 -7px}
+    .icon-btn{display:grid;place-items:center;width:30px;height:30px;padding:0;border:0;border-radius:8px;
+      background:transparent;color:var(--muted);cursor:pointer;transition:background .15s ease,color .15s ease}
+    .icon-btn:hover:not(:disabled),.icon-btn:focus-visible{background:rgba(0,0,0,.06);color:var(--ink)}
+    .icon-btn:disabled{opacity:.6;cursor:default}
+    .turn-actions time{margin-left:6px;font-size:.75rem;color:var(--muted)}
+    .turn-actions .copied{margin-left:4px;font-size:.75rem;color:var(--green-deep)}
+
     /* ---- Skeleton shown while a page's data has not arrived ---- */
     .sk{display:block;border-radius:8px;
       background:linear-gradient(90deg,rgba(0,0,0,.055) 25%,rgba(0,0,0,.10) 37%,rgba(0,0,0,.055) 63%);
       background-size:400% 100%;animation:shimmer .7s ease infinite}
     @keyframes shimmer{from{background-position:100% 0}to{background-position:0 0}}
-    main.loading .pages{display:none}
-    main:not(.loading) .sk-screen{display:none}
     .sk-eyebrow{width:120px;height:11px;margin-bottom:18px}
     .sk-title{width:min(460px,60%);height:46px;margin-bottom:12px}
     .sk-title.two{width:min(340px,45%);margin-bottom:30px}
@@ -186,7 +293,8 @@
     .legend span{display:inline-flex;align-items:center;gap:7px}
     .legend i{width:10px;height:10px;border-radius:3px;background:var(--sev-low)}
     .legend .m i{background:var(--sev-med)} .legend .h i{background:var(--sev-high)}
-    .plot{position:relative;display:grid;grid-template-columns:repeat(7,1fr);gap:18px;
+    /* the column count is data-driven, so the track count comes in as --days */
+    .plot{position:relative;display:grid;grid-template-columns:repeat(var(--days,7),1fr);gap:18px;
       height:200px;padding-left:30px;border-bottom:1px solid var(--line)}
     .grid{position:absolute;left:30px;right:0;top:0;bottom:0;pointer-events:none}
     .grid i{position:absolute;left:0;right:0;height:1px;background:rgba(0,0,0,.08)}
@@ -202,7 +310,7 @@
       border-radius:8px;background:var(--ink);color:#fff;font-style:normal;font-size:.72rem;
       white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .12s ease;z-index:3}
     .col>span:hover em{opacity:1}
-    .xaxis{display:grid;grid-template-columns:repeat(7,1fr);gap:18px;padding-left:30px;margin-top:10px;
+    .xaxis{display:grid;grid-template-columns:repeat(var(--days,7),1fr);gap:18px;padding-left:30px;margin-top:10px;
       font-size:.72rem;color:var(--muted);text-align:center}
     details.table{margin-top:18px;font-size:.82rem}
     details.table summary{cursor:pointer;color:var(--muted)}
@@ -222,14 +330,22 @@
     .field:last-child{border-bottom:0}
     .field b{font-weight:600}
     .field p{margin:3px 0 0;font-size:.82rem;color:var(--muted);max-width:52ch}
-    .field select,.field input{padding:10px 13px;border:1px solid var(--line);border-radius:10px;
+    .field select,.field input,.field textarea{padding:10px 13px;border:1px solid var(--line);border-radius:10px;
       background:var(--paper);font:inherit;font-size:.86rem}
+    /* a long-text setting: label and help above, the box full width below, its count under it */
+    .field.stacked{flex-direction:column;align-items:stretch;gap:10px}
+    .field textarea{width:100%;line-height:1.55;resize:vertical}
+    .field .count{align-self:flex-end;font-size:.72rem}
+    .stack{display:grid;gap:6px;margin:0 0 4px}
+    .stack span{font-size:.66rem;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
     .btn{padding:11px 20px;border:0;border-radius:999px;background:var(--green);color:#fff;
       font:inherit;font-size:.84rem;font-weight:600;cursor:pointer;transition:background .15s ease}
     .btn:hover{background:var(--green-dark)}
+    .btn:disabled{opacity:.6;cursor:default}
     .btn.quiet{background:transparent;color:var(--ink);border:1px solid var(--line)}
     .btn.quiet:hover{background:rgba(0,0,0,.06)}
-    .row-end{display:flex;justify-content:flex-end;margin-top:18px}
+    .row-end{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
+    .notice{margin:14px 0 0;font-size:.84rem;color:var(--green-deep)}
 
     /* keyboard focus: visible on every interactive element, both surfaces */
     :focus-visible{outline:2px solid var(--ink);outline-offset:2px}
@@ -242,106 +358,223 @@
     /* content fades out as it passes behind the composer */
     .dock::before{content:"";position:absolute;left:0;right:0;bottom:100%;height:40px;
       background:linear-gradient(to bottom,transparent,var(--ground));pointer-events:none}
-    .dock form{display:flex;align-items:flex-end;gap:10px;padding:10px;border-radius:var(--r-md);background:var(--paper)}
-    .dock textarea{flex:1;padding:12px;border:0;outline:0;resize:none;font:inherit;font-size:.95rem;
+    /* the composer glows in the brand green, mixed from the token rather than a new colour.
+       Raised above the dock's fade strip (an absolutely positioned ::before, which would
+       otherwise paint over the top of the glow). */
+    .dock form{position:relative;z-index:1;display:flex;align-items:flex-end;gap:10px;padding:10px;border-radius:var(--r-md);background:var(--paper);
+      box-shadow:0 0 0 1px color-mix(in srgb,var(--green) 35%,transparent),0 6px 26px color-mix(in srgb,var(--green) 30%,transparent);
+      transition:box-shadow .2s ease}
+    .dock form:focus-within{box-shadow:0 0 0 1.5px var(--green),0 8px 32px color-mix(in srgb,var(--green) 42%,transparent)}
+    /* one line is exactly 42px (10 + 22 + 10), the height of the picker and Send, so on a
+       one-line question both sit on the text's middle line; longer text grows upward
+       and they stay at the bottom */
+    .dock textarea{flex:1;padding:10px 12px;border:0;outline:0;resize:none;font:inherit;font-size:.95rem;line-height:22px;
       background:transparent;field-sizing:content;max-height:28vh;overflow-y:auto}
     .dock form button{flex:0 0 auto;width:42px;height:42px;border:0;border-radius:var(--r-sm);
       position:relative;background:var(--green);color:#fff;font-size:1.15rem;cursor:pointer;overflow:visible;
       transition:background .2s ease,transform .2s ease}
     .dock form button:hover{background:var(--green-dark)}
-    .dock small{display:block;padding:8px 4px 0;font-size:.72rem}
+    /* held while the local model is still answering; same treatment as .btn:disabled */
+    .dock form button:disabled{opacity:.6;cursor:default;background:var(--green)}
+    /* the line arrow, centred as a block so it sits on the button's middle */
+    .dock form .send{display:grid;place-items:center;padding:0}
+    .dock form .send svg{display:block}
+    .dock form .send.pressed{animation:send-press .3s cubic-bezier(.3,1.6,.6,1)}
+    @keyframes send-press{35%{transform:scale(.86)}}
+    .dock>small{display:block;padding:8px 4px 0;font-size:.72rem}
 
-    /* ---- Collapsed sidebar: toggle stays visible so it can be reopened ---- */
-    .app.collapsed{grid-template-columns:130px 1fr}
-    .app.collapsed aside{padding-left:14px;padding-right:54px}
-    .app.collapsed .rail-top{justify-content:center;padding-left:0}
-    .app.collapsed .brand{justify-content:center;padding:0 0 24px}
-    .app.collapsed .brand img{width:52px;height:52px}
-    .app.collapsed .brand .txt,.app.collapsed .nav-label{display:none}
-    .app.collapsed nav button{justify-content:center;padding:12px}
-    .app.collapsed .nav-icon{margin:0}
+    /* ---- Selector (Select in main.tsx; the owner's pick, "Icon rows") ----
+       A bordered button with the choice's icon in green, its label and a chevron, all
+       centred on one line; it opens a white card of rows, each with an icon tile (filled
+       green on the current choice), the label and a muted note. The card grows from the
+       button's corner. */
+    .select{position:relative;flex:0 0 auto}
+    .select-trigger{display:inline-flex;align-items:center;gap:8px;min-height:40px;padding:0 10px 0 12px;
+      border:1px solid var(--line);border-radius:10px;background:var(--paper);color:var(--ink);
+      font:inherit;font-size:.86rem;line-height:1;white-space:nowrap;cursor:pointer;transition:background .15s ease}
+    .select-trigger:hover{background:var(--ground)}
+    .select-trigger .select-icon{color:var(--green)}
+    /* the chevron is a block in its own centred cell, so it sits on the text's middle
+       line rather than its baseline */
+    .select-chevron,.select-icon{display:grid;place-items:center;flex:0 0 auto}
+    .select-chevron svg,.select-icon svg{display:block}
+    .select-chevron{color:var(--muted);transition:transform .18s ease}
+    .select-trigger[aria-expanded="true"] .select-chevron{transform:rotate(180deg)}
+    .select-dot{width:10px;height:10px;border-radius:50%;flex:0 0 auto;background:var(--sev-low)}
+    .select-dot.med{background:var(--sev-med)}
+    .select-dot.high{background:var(--sev-high)}
+    .select-menu{position:absolute;right:0;top:calc(100% + 6px);z-index:30;min-width:max(100%,250px);margin:0;padding:6px;
+      list-style:none;background:var(--paper);border-radius:var(--r-sm);outline:none;transform-origin:top right;
+      box-shadow:0 0 0 1px var(--line),0 14px 34px rgba(0,0,0,.16);animation:select-grow .16s cubic-bezier(.2,.8,.3,1)}
+    .select.up .select-menu{top:auto;bottom:calc(100% + 8px);transform-origin:bottom right}
+    .select-menu:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+    .select-menu li{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:10px;cursor:pointer;font-size:.88rem}
+    .select-menu li.active{background:var(--ground)}
+    .select-menu li[aria-disabled="true"]{opacity:.45;cursor:default}
+    .select-menu .select-icon{width:30px;height:30px;border-radius:9px;background:var(--ground);color:var(--green-deep)}
+    .select-menu li.active .select-icon{background:var(--paper)}
+    .select-menu li[aria-selected="true"] .select-icon{background:var(--green);color:#fff}
+    .select-menu li[aria-selected="true"]{font-weight:600}
+    /* a dot is narrower than an icon tile: centre it in the same column */
+    .select-menu .select-dot{margin:0 10px}
+    .select-text{display:grid;gap:2px;min-width:0}
+    .select-text small{font-size:.76rem;font-weight:400;color:var(--muted);line-height:1.3}
+    @keyframes select-grow{from{opacity:0;transform:scale(.9)}}
+    /* In the composer: beside Send and its height. The composer's own rule paints every
+       button in it as the green Send button, so this one is put back to the selector. */
+    .dock form .select-trigger{width:auto;height:42px;border-radius:var(--r-sm);background:var(--paper);color:var(--ink);font-size:.86rem}
+    .dock form .select-trigger:hover{background:var(--ground)}
 
-    /* ---- Boot sequence: plays once per session. The lighthouse rises out of the
-           bottom edge with its stripes rolling like a barber's pole, beams sweep
-           left to right, the light goes out for half a second, then the app ---- */
-    .boot{position:fixed;inset:0;z-index:999;overflow:hidden;background:var(--green);
-      animation:boot-out .225s ease 2.225s forwards}
-    /* rooted to the bottom edge: it only travels straight up and translateY never
-       goes below 0, so the flat base stays planted on the bottom of the screen */
-    .boot-stage{position:absolute;left:50%;bottom:0;translate:-50% 0;
-      height:min(88vh,190vw);aspect-ratio:325/1046;
-      animation:rise .7s cubic-bezier(.2,.75,.3,1) both,lamp-out .79s ease 1.675s forwards}
-    .lh-head{position:absolute;inset:0;display:block;width:100%;height:100%}
-    /* the shaft is a straight-sided cone traced from the logo. the outer shape is
-       filled white and the striped layer is inset 2.6%, so the white left as a rim
-       reads as the tower's side walls, exactly as the logo draws them */
-    .lh-shaft{position:absolute;left:0;right:0;top:33.84%;bottom:0;background:#fff;
-      clip-path:polygon(15.7% 0,0.3% 100%,99.7% 100%,84.3% 0)}
-    .lh-stripes{position:absolute;inset:0;overflow:hidden;
-      clip-path:polygon(18.3% 0,2.9% 100%,97.1% 100%,81.7% 0)}
-    /* soft 0.2vh shoulders on each band so the diagonals do not read as stair-stepped */
-    .lh-stripes span{position:absolute;left:-40%;right:-40%;top:-60%;bottom:-60%;
-      background:repeating-linear-gradient(-25deg,#fff 0 6.3vh,var(--green) 6.5vh 12.6vh,#fff 12.8vh);
-      animation:barber .95s linear infinite}
-    /* one stripe period measured vertically: 12.8vh / cos(25deg) */
-    @keyframes barber{from{transform:translateY(0)}to{transform:translateY(-14.124vh)}}
-    @keyframes rise{
-      from{opacity:0;transform:translateY(100%)}
-      30%{opacity:1}
-      to{opacity:1;transform:translateY(0)}}
-    /* lamp glow, sitting on the lantern */
-    .boot-stage::before{content:"";position:absolute;left:50%;top:23%;width:44vh;height:44vh;
-      translate:-50% -50%;border-radius:50%;z-index:1;
-      background:radial-gradient(circle,rgba(255,255,255,.3),rgba(255,255,255,0) 62%)}
-    /* zero-size anchor on the lantern; every beam pivots from this point */
-    .beams{position:absolute;left:50%;top:23%;width:0;height:0;z-index:2}
-    /* the wrapper carries the fixed angle, the inner element does the animating,
-       so the keyframes only touch opacity and scaleY */
-    .beams i{position:absolute;left:0;bottom:0;width:17vmax;height:100vmax;
-      transform-origin:50% 100%;transform:translateX(-50%) rotate(var(--a))}
-    .beams b{position:absolute;inset:0;transform-origin:50% 100%;opacity:0;filter:blur(4px);
-      background:linear-gradient(to top,rgba(255,255,255,.85),rgba(255,255,255,.38) 40%,rgba(255,255,255,0) 100%);
-      clip-path:polygon(50% 100%,0 0,100% 0);
-      animation:beam 1.01s ease-out both;animation-delay:var(--d)}
-    @keyframes beam{
-      0%{opacity:0;transform:scaleY(.12)}
-      30%{opacity:1}
-      100%{opacity:0;transform:scaleY(1)}}
-    @keyframes lamp-out{to{opacity:0}}
-    @keyframes boot-out{to{opacity:0;visibility:hidden}}
-    .app{animation:app-in .25s ease 2.25s both}
-    @keyframes app-in{from{opacity:0}to{opacity:1}}
-    /* already booted this session: straight to the app, no green screen */
-    html.booted .boot{display:none}
-    html.booted .app{animation:none}
+    /* ---- Sign-in and first-run password change ---- */
+    .login{display:grid;place-items:center;min-height:100vh;padding:24px;background:var(--green);color:#eafff6}
+    .login section{width:min(440px,100%)}
+    .login img{display:block;width:72px;height:72px;margin-bottom:26px;border-radius:50%;background:#fff;object-fit:cover}
+    .login .eyebrow{color:#cdeee2}
+    .login h1{color:#fff;font-size:clamp(1.9rem,3.4vw,2.6rem)}
+    .login>section>p{max-width:38ch;color:#d8f3e9}
+    .login form{display:grid;gap:12px;margin-top:28px}
+    .login input{padding:13px 15px;border:1px solid rgba(255,255,255,.34);border-radius:12px;
+      background:rgba(0,0,0,.14);color:#fff;font:inherit}
+    .login input::placeholder{color:#bfe3d6}
+    .login button{padding:13px;border:0;border-radius:999px;background:#fff;color:var(--green-deep);
+      font:inherit;font-weight:700;cursor:pointer}
+    .login button:disabled{opacity:.7;cursor:default}
+    .login .error{margin:2px 0 0;font-size:.86rem;color:#ffe0da}
 
     @media (prefers-reduced-motion:reduce){
-      .boot{display:none}
-      .app,.boot-stage,.beams b,.lh-stripes span,.sk{animation:none}
+      .sk,.wave-mark g,.wave-mark circle,.dock form .send.pressed{animation:none}
+      /* a still ring segment would read as broken, so the plain rim stands alone */
+      .wave-mark .ring{display:none}
     }
 
     @media (max-width:720px){
       .app,.app.collapsed{grid-template-columns:1fr;height:auto;overflow:visible}
-      .app>aside,.app.collapsed>aside{height:auto;padding:14px 14px 54px;
-        flex-direction:row;align-items:center;overflow:auto}
-      .rail-top{display:none}
-      .brand,.app.collapsed .brand{padding:0 10px 0 4px}
-      .brand img,.app.collapsed .brand img{width:44px;height:44px}
-      .brand span{display:none}
-      aside nav{display:flex}
-      nav button,.app.collapsed nav button{display:block;width:auto;white-space:nowrap}
-      .bottom{margin:0 0 0 auto;padding:0;border:0}
-      .bottom button:last-child{display:none}
       main{height:auto;overflow:visible;display:block;margin:calc(var(--r-lg) * -1) 0 0;
         border-radius:var(--r-lg) var(--r-lg) 0 0;
         clip-path:inset(0 round var(--r-lg) var(--r-lg) 0 0)}
       .sheet{overflow:visible;padding:44px 20px 20px}
-      .sheet>*,.dock form,.dock small{max-width:none}
+      .sheet>*,.dock form,.dock>small{max-width:none}
       .dock{position:sticky;bottom:0;padding:0 20px 16px}
       .cards,.prompt-cards,.sk-cards{grid-template-columns:1fr}
       .alert .when{display:none}
       .detail{padding-left:6px}
     }
+
+    /* ======== dashboard/src/sidebar.css (verbatim) ======== */
+    /* Sidebar rules are isolated so the application frame remains easy to restyle. */
+
+    /* ---- Sidebar: flat green panel; the content sheet laps over it ---- */
+    aside{height:100vh;display:flex;flex-direction:column;
+      /* right padding clears the content sheet that laps over this edge */
+      padding:22px 56px 28px 20px;color:#eafff6;background:var(--green);overflow-y:auto;
+      /* Recent chats scroll on their own (below), so the rail itself only scrolls as a
+         last resort, in a window too short for even the nav. Its scrollbar would sit in
+         the strip the sheet laps over: hidden there, and showing through the sheet's
+         rounded corners as a grey notch where the green should tuck under. Wheel, touch
+         and keyboard focus still scroll it. */
+      scrollbar-width:none}
+    aside::-webkit-scrollbar{display:none}
+    /* the toggle wears a nav item's shape, size and hover, and its glyph sits on the
+       same centre line as the nav icons, so it reads as part of that column */
+    .rail-top{position:relative;display:flex;justify-content:flex-start;gap:4px;padding-left:3px;padding-bottom:12px;margin-bottom:16px}
+    /* a short floating rule sets the controls apart from the rest of the rail; inset
+       from both ends and in the rail's own divider colour */
+    .rail-top::after{content:"";position:absolute;left:14px;right:14px;bottom:0;height:1px;border-radius:1px;background:rgba(255,255,255,.28)}
+    /* new chat, pause and shut down sit beside the toggle in exactly its shape, so the
+       row reads as one strip of rail controls */
+    .collapse,.rail-btn{display:grid;place-items:center;width:44px;height:44px;padding:0;border:0;
+      border-radius:var(--r-sm);background:transparent;color:#d8f3e9;
+      font-size:1.05rem;font-weight:700;line-height:1;cursor:pointer;
+      transition:background .15s ease,color .15s ease}
+    .collapse:hover,.rail-btn:hover:not(:disabled){background:rgba(255,255,255,.14);color:#fff}
+    .rail-btn:disabled{opacity:.6;cursor:default}
+    .brand{display:flex;align-items:center;gap:13px;padding:0 4px 28px}
+    .brand img{flex:0 0 auto;width:64px;height:64px;border-radius:50%;background:#fff;
+      object-fit:cover;transition:width .18s ease,height .18s ease}
+    .brand .txt{min-width:0}
+    .brand b{display:block;color:#fff;font-size:1.15rem;font-weight:700;letter-spacing:-.01em;line-height:1.1}
+    .brand .txt span{display:block;font-size:.7rem;font-weight:400;letter-spacing:.02em;color:#cdeee2}
+
+    nav button{display:flex;align-items:center;width:100%;margin:3px 0;padding:12px 14px;border:0;
+      border-radius:var(--r-sm);background:transparent;color:#d8f3e9;text-align:left;font:inherit;
+      font-size:.9rem;font-weight:500;cursor:pointer;transition:background .15s ease,color .15s ease}
+    nav button:hover{background:rgba(255,255,255,.14);color:#fff}
+    nav button.active{background:#fff;color:var(--green-deep);font-weight:600}
+    .nav-icon{display:inline-grid;width:22px;place-items:center;margin-right:11px;font-size:1.05rem;font-weight:700}
+    .nav-icon svg{display:block}
+    .bottom{margin-top:auto;padding-top:14px;border-top:1px solid rgba(255,255,255,.28)}
+
+    /* ---- Recent chats: one row per conversation, the way the Claude apps list them.
+           Individual messages never appear here; the row is the whole thread, titled
+           by how it opened, and clicking it reopens that thread in place. ---- */
+    /* The section takes the rail's spare height and gives it back first when the window
+       is short: down to a few rows, then the list scrolls inside itself, so the brand,
+       nav and bottom items never move. */
+    .chats{display:flex;flex-direction:column;flex:0 1 auto;min-height:130px;margin:22px 0 4px;padding-top:18px;
+      border-top:1px solid rgba(255,255,255,.28)}
+    .chats .head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 10px 6px}
+    .chats .head span{font-size:.66rem;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:#bfe3d6}
+    /* a thin scrollbar in the rail's own divider colour, inside the rail (the sheet's
+       lap starts beyond the rail's right padding) */
+    .chats .list{min-height:0;overflow-y:auto;overscroll-behavior:contain;
+      scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.35) transparent}
+    .chat-row{position:relative;margin:1px 0}
+    .chats button.chat{display:flex;align-items:center;gap:9px;width:100%;padding:9px 10px;border:0;
+      border-radius:11px;background:transparent;color:#cdeee2;font:inherit;font-size:.82rem;font-weight:400;
+      text-align:left;cursor:pointer;transition:background .15s ease,color .15s ease}
+    .chat-row:hover button.chat{background:rgba(255,255,255,.14);color:#fff}
+    .chat-row.active button.chat{background:rgba(255,255,255,.2);color:#fff}
+    /* Delete sits on the row's right edge, shown while the row is pointed at or has
+       keyboard focus (always on touch screens, which cannot hover). The title makes room
+       for it then, so the two never overlap. */
+    .chat-delete{position:absolute;top:50%;right:5px;display:grid;place-items:center;width:28px;height:28px;padding:0;
+      border:0;border-radius:8px;background:transparent;color:#d8f3e9;cursor:pointer;opacity:0;transform:translateY(-50%);
+      transition:opacity .15s ease,background .15s ease,color .15s ease}
+    .chat-delete svg{display:block}
+    .chat-row:hover .chat-delete,.chat-row:focus-within .chat-delete{opacity:1}
+    .chat-delete:hover{background:rgba(255,255,255,.18);color:#fff}
+    .chat-row:hover button.chat,.chat-row:focus-within button.chat{padding-right:40px}
+    @media (hover:none){
+      .chat-delete{opacity:1}
+      .chats button.chat{padding-right:40px}
+    }
+    .chats .title{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+    .chats .mark{flex:0 0 auto;font-size:.8rem;opacity:.8}
+    .chats .none{margin:0;padding:5px 10px;font-size:.8rem;color:#a9d6c7}
+
+    /* ---- Collapsed sidebar: toggle stays visible so it can be reopened ---- */
+    .app.collapsed{grid-template-columns:130px 1fr}
+    .app.collapsed aside{padding-left:14px;padding-right:54px}
+    .app.collapsed .rail-top{justify-content:center;padding-left:0}
+    .app.collapsed .rail-top::after{left:50%;right:auto;width:28px;transform:translateX(-50%)}
+    .app.collapsed .brand{justify-content:center;padding:0 0 24px}
+    .app.collapsed .brand img{width:52px;height:52px}
+    .app.collapsed .brand .txt,.app.collapsed .nav-label{display:none}
+    .app.collapsed nav button{justify-content:center;padding:12px}
+    .app.collapsed .nav-icon{margin:0}
+    /* the narrow rail has no room for chat titles, so the whole section goes rather
+       than leaving an empty bordered block behind */
+    .app.collapsed .chats{display:none}
+
+    @media (max-width:720px){
+      .app>aside,.app.collapsed>aside{height:auto;padding:14px 14px 54px;
+        flex-direction:row;align-items:center;overflow:auto}
+      .rail-top{display:none}
+      .brand,.app.collapsed .brand{padding:0 10px 0 4px}
+      .brand img,.app.collapsed .brand img{width:44px;height:44px}
+      .brand .txt span{display:none}
+      aside nav{display:flex}
+      nav button,.app.collapsed nav button{display:block;width:auto;white-space:nowrap}
+      .bottom{margin:0 0 0 auto;padding:0;border:0}
+      .bottom button:last-child{display:none}
+      /* below 720px the sidebar is a horizontal bar, so the chat list has nowhere to sit */
+      .chats,.app.collapsed .chats{display:none}
+    }
+
+    .page{display:none}
+    .page.on{display:block}
+    main.loading .pages{display:none}
+    main:not(.loading) .sk-screen{display:none}
   </style>
   <script>
     // decided before first paint so the green screen never flashes on a revisit
@@ -365,39 +598,54 @@
     </div>
   </div>
 
+  <!-- Signed in as an admin with a GenAI Studio key stored, so every control the app
+       can show is here: the rail's pause and shut-down buttons, Advanced, Admin, the
+       Chat AI section and the per-question model picker. -->
   <div class="app">
     <aside>
-      <div class="rail-top">
-        <button class="collapse" title="Collapse sidebar" aria-expanded="true">&#9776;</button>
+      <div class="rail-top" id="rail-top">
+        <button class="collapse" id="collapse" title="Collapse sidebar" aria-label="Collapse sidebar" aria-expanded="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 4h12a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3zM9.5 4v16" /></svg></button>
+        <button class="rail-btn" type="button" id="new-chat" title="New chat" aria-label="New chat"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.4 2.6a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4z" /></svg></button>
+        <button class="rail-btn" type="button" title="Pause monitoring" aria-label="Pause monitoring"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 5v14M15 5v14" /></svg></button>
+        <button class="rail-btn" type="button" title="Shut down LightHouse" aria-label="Shut down LightHouse"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3v9M6.34 6.34a8 8 0 1 0 11.32 0" /></svg></button>
       </div>
       <div class="brand">
         <img src="assets/lighthouse-logo.png" alt="LightHouse" />
         <span class="txt"><b>LightHouse</b><span>Guiding You to Safer Shores</span></span>
       </div>
       <nav>
-        <button class="active" data-page="home"><span class="nav-icon">⌂</span><span class="nav-label">Home</span></button>
-        <button data-page="alerts"><span class="nav-icon">!</span><span class="nav-label">Alerts</span></button>
-        <button data-page="trends"><span class="nav-icon">↗</span><span class="nav-label">Trends</span></button>
-        <button data-page="advanced"><span class="nav-icon">⌘</span><span class="nav-label">Advanced analytics</span></button>
+        <button title="Home" class="active" data-page="home"><span class="nav-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M5 12.5 12 7l7 5.5V17H5zM10.5 17v-3h3v3M2.5 21c1.6-1.2 3.4-1.2 5 0s3.4 1.2 5 0 3.4-1.2 5 0 2.4 1 4 0" /></svg></span><span class="nav-label">Home</span></button>
+        <button title="Alerts" data-page="alerts"><span class="nav-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3.5 21.5 20h-19zM12 10v4.5M12 17.3h.01" /></svg></span><span class="nav-label">Alerts</span></button>
+        <!-- Trends is the one solid icon: four bars, each taller than the last -->
+        <button title="Trends" data-page="trends"><span class="nav-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true" focusable="false"><rect x="2.5" y="15" width="3.8" height="6.5" rx="1.2" /><rect x="7.7" y="11.5" width="3.8" height="10" rx="1.2" /><rect x="12.9" y="7.5" width="3.8" height="14" rx="1.2" /><rect x="18.1" y="3" width="3.8" height="18.5" rx="1.2" /></svg></span><span class="nav-label">Trends</span></button>
+        <button title="Advanced analytics" data-page="advanced"><span class="nav-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M17 10.5a6.5 6.5 0 1 1-13 0 6.5 6.5 0 0 1 13 0zM20.5 20.5l-5.3-5.3M6.5 10.5h1.8l1-2.2 2 4.4 1-2.2h1.7" /></svg></span><span class="nav-label">Advanced analytics</span></button>
       </nav>
+      <section class="chats">
+        <div class="head">
+          <span class="nav-label">Recent chats</span>
+        </div>
+        <div class="list">
+          <div class="chat-row" data-row="b"><button class="chat" data-chat="b" title="Is front-desk-pc safe to keep using?"><span class="mark" aria-hidden="true">↗</span><span class="title nav-label">Is front-desk-pc safe to keep using?</span></button></div>
+          <div class="chat-row" data-row="a"><button class="chat" data-chat="a" title="Repeated failed sign-ins from one address"><span class="mark" aria-hidden="true">↗</span><span class="title nav-label">Repeated failed sign-ins from one address</span></button><button class="chat-delete" type="button" title="Delete chat" aria-label="Delete chat: Repeated failed sign-ins from one address"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 7h16M9.5 7V4.5h5V7M6.5 7l1 12.5a1.5 1.5 0 0 0 1.5 1.5h6a1.5 1.5 0 0 0 1.5-1.5l1-12.5M10 11v6M14 11v6" /></svg></button></div>
+          <div class="chat-row" data-row="c"><button class="chat" data-chat="c" title="Network and security summary"><span class="mark" aria-hidden="true">↗</span><span class="title nav-label">Network and security summary</span></button><button class="chat-delete" type="button" title="Delete chat" aria-label="Delete chat: Network and security summary"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 7h16M9.5 7V4.5h5V7M6.5 7l1 12.5a1.5 1.5 0 0 0 1.5 1.5h6a1.5 1.5 0 0 0 1.5-1.5l1-12.5M10 11v6M14 11v6" /></svg></button></div>
+        </div>
+      </section>
       <nav class="bottom">
-        <button data-page="settings"><span class="nav-icon">⚙</span><span class="nav-label">Settings</span></button>
-        <button data-page="admin"><span class="nav-icon">♙</span><span class="nav-label">Admin</span></button>
-        <button><span class="nav-icon">⇥</span><span class="nav-label">Sign out</span></button>
+        <button title="Settings" data-page="settings"><span class="nav-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 6h9M17 6h3M4 12h1M9 12h11M4 18h11M19 18h1M17 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zM9 12a2 2 0 1 1-4 0 2 2 0 0 1 4 0zM19 18a2 2 0 1 1-4 0 2 2 0 0 1 4 0z" /></svg></span><span class="nav-label">Settings</span></button>
+        <button title="Admin" data-page="admin"><span class="nav-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M13 8a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0zM3 20c0-3.6 2.9-6 6.5-6 1.3 0 2.5.3 3.5.9M17.5 13 21 14.3v2.6c0 2-1.5 3.4-3.5 4.1-2-.7-3.5-2.1-3.5-4.1v-2.6z" /></svg></span><span class="nav-label">Admin</span></button>
+        <button><span class="nav-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M10 4H6.5A1.5 1.5 0 0 0 5 5.5v13A1.5 1.5 0 0 0 6.5 20H10M14.5 8l4 4-4 4M18.5 12h-9" /></svg></span><span class="nav-label">Sign out</span></button>
       </nav>
     </aside>
 
     <main class="with-dock loading">
-      <div class="sheet">
+      <div class="sheet" id="sheet">
 
       <!-- shown until the page's data arrives -->
       <div class="sk-screen" aria-hidden="true">
         <span class="sk sk-eyebrow"></span>
         <span class="sk sk-title"></span>
         <span class="sk sk-title two"></span>
-        <div class="sk-cards">
-          <span class="sk sk-card"></span><span class="sk sk-card"></span><span class="sk sk-card"></span>
-        </div>
+        <div class="sk-cards"><span class="sk sk-card"></span><span class="sk sk-card"></span><span class="sk sk-card"></span></div>
         <div class="sk-rows">
           <div class="sk-row"><span class="sk sk-dot"></span><div><span class="sk sk-line w30"></span><span class="sk sk-line w70"></span></div><span class="sk sk-line w12"></span></div>
           <div class="sk-row"><span class="sk sk-dot"></span><div><span class="sk sk-line w55"></span><span class="sk sk-line w70"></span></div><span class="sk sk-line w12"></span></div>
@@ -412,22 +660,34 @@
         <section class="welcome">
           <p class="eyebrow">Network overview</p>
           <h1>1 item deserves<br>your attention</h1>
-          <div class="health"><i class="warn"></i><b>Attention needed</b><small>2 open alerts</small></div>
+          <div class="health">
+            <i class="warn"></i>
+            <b>Attention needed</b>
+            <small>3 open alerts</small>
+            <button class="btn quiet" type="button">Pause monitoring</button>
+            <button class="btn quiet" type="button">Shut down</button>
+          </div>
         </section>
         <section class="cards lead">
           <div><small>Health status</small><strong>Review alerts</strong><p>Monitoring sources are ready to report.</p></div>
-          <div><small>Open alerts</small><strong>2</strong><p>Items that have not been resolved.</p></div>
+          <div><small>Open alerts</small><strong>3</strong><p>Items that have not been resolved.</p></div>
           <div><small>High priority</small><strong>1</strong><p>Potentially urgent activity.</p></div>
         </section>
         <section class="recent">
           <div class="head"><p class="eyebrow">Recent activity</p><h2>Latest alerts</h2></div>
-          <!-- open by default in the frame to show the get_help banner -->
+          <!-- open in the frame to show the get-help banner; open get-help alerts
+               always come first, the rest newest first, four at most -->
           <details class="alert" open>
             <summary>
               <span class="dot high"></span>
-              <div><span class="sev high">High severity · Low confidence</span><span class="pill get_help">Get help now</span><b>Repeated failed logins from one address</b>
-                <p>14 failed sign-ins to the file server in four minutes, all from 10.0.4.66.</p></div>
-              <span class="when">Today, 11:07 AM</span><span class="chev">&#9662;</span>
+              <div>
+                <span class="sev high">High severity · Low confidence</span>
+                <span class="pill get_help">Get help now</span>
+                <b>Repeated failed sign-ins from one address</b>
+                <p>Someone tried to sign in to the file server 14 times in four minutes from 10.0.4.66, and every attempt failed. That pattern looks like a program guessing passwords rather than a person mistyping their own.</p>
+              </div>
+              <span class="when">Today, 11:07 AM</span>
+              <span class="chev" aria-hidden="true">▾</span>
             </summary>
             <div class="detail">
               <div class="guidance get_help">
@@ -442,30 +702,32 @@
                 </ol>
               </div>
               <p class="eyebrow">What this means</p>
-              <p>Fourteen sign-in attempts failed against one server inside four minutes, from an address
-                that has never held a successful session. That rate and that pattern look like someone
-                working through a list of passwords, not a person mistyping their own.</p>
+              <p>Someone tried to sign in to the file server 14 times in four minutes from 10.0.4.66, and every attempt failed. That pattern looks like a program guessing passwords rather than a person mistyping their own.</p>
               <p class="eyebrow">LightHouse’s suggestion — check with your IT provider first</p>
               <ol>
-                <li><b>Block 10.0.4.66 first.</b> Drop it at the firewall, or unplug the device if it sits on your own network. This stops the attempts while you look into it.</li>
-                <li><b>Work out what the device is.</b> It is not in your known-device list. Your router DHCP table will show the lease, and the switch will show which port it is on.</li>
-                <li><b>Reset the password on any account it targeted</b> and turn on lockout after five failed attempts, so a run like this stops itself next time.</li>
-                <li><b>Check whether anything succeeded</b> from that address before the failures began. If it did, treat that account as compromised.</li>
+                <li><b>Block 10.0.4.66 at your router or firewall.</b> That stops the attempts while you look into it.</li>
+                <li><b>Find out what the device at that address is.</b> Your router’s list of connected devices shows its name.</li>
+                <li><b>Change the password on every account it tried.</b> Pick one nobody else knows.</li>
               </ol>
               <div class="actions">
                 <button class="btn">Mark resolved</button>
                 <button class="btn quiet">Dismiss</button>
                 <button class="btn quiet">Ask LightHouse about this</button>
+                <button class="btn quiet" data-evidence>Show evidence</button>
               </div>
-              <p class="ai-note">Written on this appliance by qwen3:8b and checked against the alert schema. Nothing left your network.</p>
+              <p class="ai-note">Written on this appliance and checked against the alert schema. Nothing left your network.</p>
             </div>
           </details>
           <details class="alert">
             <summary>
               <span class="dot medium"></span>
-              <div><span class="sev medium">Medium severity · Low confidence</span><b>Unusual DNS activity detected</b>
-                <p>A device made an unusual request. Review the device if this repeats.</p></div>
-              <span class="when">Today, 10:42 AM</span><span class="chev">&#9662;</span>
+              <div>
+                <span class="sev medium">Medium severity · Low confidence</span>
+                <b>Unusual DNS activity from front-desk-pc</b>
+                <p>front-desk-pc looked up 214 different names under one web domain in three minutes. Some programs smuggle data out this way, but ad blockers and antivirus updates can look the same.</p>
+              </div>
+              <span class="when">Today, 10:42 AM</span>
+              <span class="chev" aria-hidden="true">▾</span>
             </summary>
             <div class="detail">
               <div class="guidance review">
@@ -474,30 +736,32 @@
                 <p>The explanation below may be wrong, in either direction. Before you change anything, have someone technical (your IT provider or a tech-savvy colleague) look at this alert. Leave it open until they have.</p>
               </div>
               <p class="eyebrow">What this means</p>
-              <p>front-desk-pc asked for 214 different subdomains of a single domain in three minutes.
-                That shape of traffic is one way data gets smuggled out over DNS, but ad blockers,
-                antivirus updaters and content networks produce it too. One burst on its own is usually harmless.</p>
+              <p>front-desk-pc looked up 214 different names under one web domain in three minutes. Some programs smuggle data out this way, but ad blockers and antivirus updates can look the same.</p>
               <p class="eyebrow">Recommended steps</p>
               <ol>
-                <li><b>Find out who was on front-desk-pc at 10:42</b> and what they were doing. That often answers it outright.</li>
-                <li><b>Run a malware scan</b> on that device before you clear the alert.</li>
-                <li><b>If the domain means nothing to you</b>, block it at your DNS resolver and see whether anything on the machine breaks.</li>
-                <li><b>Give it 24 hours.</b> A single burst is noise; the same pattern returning daily is worth escalating.</li>
+                <li><b>Ask who was using front-desk-pc at 10:42.</b> That often explains it straight away.</li>
+                <li><b>Run a full scan in Windows Security on that computer.</b></li>
+                <li><b>If it happens again tomorrow, tell your IT provider.</b></li>
               </ol>
               <div class="actions">
                 <button class="btn">Mark resolved</button>
                 <button class="btn quiet">Dismiss</button>
                 <button class="btn quiet">Ask LightHouse about this</button>
+                <button class="btn quiet" data-evidence>Show evidence</button>
               </div>
-              <p class="ai-note">Written on this appliance by qwen3:8b and checked against the alert schema. Nothing left your network.</p>
+              <p class="ai-note">Written on this appliance and checked against the alert schema. Nothing left your network.</p>
             </div>
           </details>
           <details class="alert">
             <summary>
               <span class="dot low"></span>
-              <div><span class="sev">Low severity · Low confidence</span><b>New device joined the network</b>
-                <p>A new device was observed. Confirm that it belongs to your business.</p></div>
-              <span class="when">Today, 9:18 AM</span><span class="chev">&#9662;</span>
+              <div>
+                <span class="sev low">Low severity · Low confidence</span>
+                <b>New device joined the network</b>
+                <p>A device LightHouse has not seen before connected to your network. Most of the time this is a phone, laptop or printer being switched on.</p>
+              </div>
+              <span class="when">Today, 9:18 AM</span>
+              <span class="chev" aria-hidden="true">▾</span>
             </summary>
             <div class="detail">
               <div class="guidance caution">
@@ -506,31 +770,143 @@
                 <p><b>Check first:</b> ask whoever uses this device whether they expected this activity at this time. If nobody did, treat the alert as real.</p>
               </div>
               <p class="eyebrow">What this means</p>
-              <p>A device with a hardware address LightHouse has not seen before took an address on your
-                network. Most of the time this is a phone, a laptop or a printer being switched on.</p>
+              <p>A device LightHouse has not seen before connected to your network. Most of the time this is a phone, laptop or printer being switched on.</p>
               <p class="eyebrow">Recommended steps</p>
               <ol>
-                <li><b>Match the hardware address to something you recognise.</b> The first half of it names the manufacturer, which is usually enough.</li>
-                <li><b>If it is yours, give it a name</b> so future alerts read clearly instead of showing a number.</li>
-                <li><b>If it is not yours</b>, remove it from the network and change the Wi-Fi password. Anything that reconnects afterwards is worth a second look.</li>
+                <li><b>Ask your staff whether anyone connected something new this morning.</b></li>
+                <li><b>If nobody did, change the Wi-Fi password.</b> Anything that reconnects afterwards is worth a second look.</li>
+              </ol>
+              <div class="actions">
+                <button class="btn">Mark resolved</button>
+                <button class="btn quiet">Dismiss</button>
+                <button class="btn quiet">Ask LightHouse about this</button>
+                <button class="btn quiet" data-evidence>Show evidence</button>
+              </div>
+              <p class="ai-note">Written on this appliance and checked against the alert schema. Nothing left your network.</p>
+            </div>
+          </details>
+          <details class="alert">
+            <summary>
+              <span class="dot medium"></span>
+              <div>
+                <span class="sev medium">Medium severity · High confidence</span>
+                <b>Port scan against the front desk PC</b>
+                <p>Another device checked over a thousand network ports on front-desk-pc in under a minute. The Windows firewall refused every one, so nothing was reached.</p>
+              </div>
+              <span class="when">Yesterday, 4:51 PM</span>
+              <span class="chev" aria-hidden="true">▾</span>
+            </summary>
+            <div class="detail">
+              <p class="eyebrow">What this means</p>
+              <p>Another device checked over a thousand network ports on front-desk-pc in under a minute. The Windows firewall refused every one, so nothing was reached.</p>
+              <p class="eyebrow">Recommended steps</p>
+              <ol>
+                <li><b>Make sure Windows Update has run on front-desk-pc.</b> A scan is often the step before an attempt.</li>
               </ol>
               <div class="actions">
                 <button class="btn quiet">Reopen</button>
                 <button class="btn quiet">Ask LightHouse about this</button>
+                <button class="btn quiet" data-evidence>Show evidence</button>
               </div>
-              <p class="ai-note">Written on this appliance by qwen3:8b and checked against the alert schema. Nothing left your network.</p>
+              <p class="ai-note">Written on this appliance and checked against the alert schema. Nothing left your network.</p>
             </div>
           </details>
         </section>
         <section class="common-questions">
           <p class="eyebrow">Common questions</p>
           <div class="prompt-cards">
-            <button>Summarize my network and security status <b>↗</b></button>
-            <button>Explain what my most recent alert means <b>↗</b></button>
-            <button>What should I address first? <b>↗</b></button>
-            <button>Are there any unusual devices on my network? <b>↗</b></button>
+            <button type="button">Summarize my network and security status <b aria-hidden="true">↗</b></button>
+            <button type="button">Explain what my most recent alert means <b aria-hidden="true">↗</b></button>
+            <button type="button">What should I address first? <b aria-hidden="true">↗</b></button>
+            <button type="button">Are there any unusual devices on my network? <b aria-hidden="true">↗</b></button>
           </div>
         </section>
+      </div>
+
+      <!-- ===================== CHAT THREADS =====================
+           Opened from Recent chats. Nobody is named: the question sits in its own card
+           on the right, the answer runs as plain text on the left. Copy on every
+           answer, Retry only on the thread's last one. -->
+      <div class="page" id="page-thread-a">
+        <p class="eyebrow">Chat</p>
+        <h2>Repeated failed sign-ins from one address</h2>
+        <div class="thread">
+          <div class="turn me" title="Thursday, October 9, 2026 at 11:14 AM"><p>Explain this alert. What does it mean, and what should I do?</p></div>
+          <div class="turn them">
+            <p>Someone tried to sign in to your file server 14 times in four minutes from one address, and every attempt failed.</p>
+            <p>That pattern usually means a program is guessing passwords, not a person mistyping. LightHouse has not seen the device at 10.0.4.66 before, so treat this as serious until someone has checked it.</p>
+            <p>1. Call your IT provider and tell them about this alert.</p>
+            <p>2. Leave the file server switched on and don’t delete anything on it.</p>
+            <p>3. Write down the time and anything unusual you noticed today.</p>
+            <p>Next step: call your IT provider now and read them this alert.</p>
+            <div class="turn-actions">
+              <button type="button" class="icon-btn" aria-label="Copy answer" title="Copy" data-copy><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 9h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1V10a1 1 0 0 1 1-1zM5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1" /></svg></button>
+              <button type="button" class="icon-btn" aria-label="Retry answer" title="Retry"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 12a9 9 0 1 0 2.64-6.36L3 8.3M3 3v5.3h5.3" /></svg></button>
+              <time datetime="2026-10-09T15:15:00.000Z" title="Thursday, October 9, 2026 at 11:15 AM">12 min ago</time>
+              <span class="copied" role="status"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- the thread still waiting on its answer: the WaveMark and a status line
+           stand in for the words until the first ones arrive -->
+      <div class="page" id="page-thread-b">
+        <p class="eyebrow">Chat</p>
+        <h2>Is front-desk-pc safe to keep using?</h2>
+        <div class="thread">
+          <div class="turn me" title="Thursday, October 9, 2026 at 11:21 AM"><p>Is front-desk-pc safe to keep using after the DNS alert this morning?</p></div>
+          <div class="turn them">
+            <p>Probably yes, but check one thing before you relax about it.</p>
+            <p>The lookups that set off the alert came in one short burst and have not come back since. Ad blockers and antivirus updates often look like this, but so does some malware, which is why LightHouse asked for a second opinion.</p>
+            <p>Next step: run a full scan in Windows Security on front-desk-pc today.</p>
+            <div class="turn-actions">
+              <button type="button" class="icon-btn" aria-label="Copy answer" title="Copy" data-copy><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 9h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1V10a1 1 0 0 1 1-1zM5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1" /></svg></button>
+              <time datetime="2026-10-09T15:22:00.000Z" title="Thursday, October 9, 2026 at 11:22 AM">5 min ago</time>
+              <span class="copied" role="status"></span>
+            </div>
+          </div>
+          <div class="turn me" title="Thursday, October 9, 2026 at 11:27 AM"><p>How do I run a full scan in Windows Security?</p></div>
+          <div class="turn them">
+            <div class="thinking">
+              <span class="mark wave-mark" role="status" aria-label="LightHouse is replying">
+                <svg viewBox="0 0 26 26" aria-hidden="true" focusable="false">
+                  <defs><clipPath id="wave-clip-b"><circle cx="13" cy="13" r="11" /></clipPath></defs>
+                  <circle class="tank" cx="13" cy="13" r="11" />
+                  <g clip-path="url(#wave-clip-b)">
+                    <g class="water">
+                      <g class="drops"><circle cx="9" cy="12.5" r="1" /><circle cx="13.5" cy="12" r=".8" /><circle cx="17.5" cy="12.5" r=".9" /></g>
+                      <g class="swell back"><path d="M0 14 Q6.5 11.5 13 14 T26 14 T39 14 T52 14 V26 H0 Z" /></g>
+                      <g class="swell front"><path d="M0 15 Q6.5 17.5 13 15 T26 15 T39 15 T52 15 V26 H0 Z" /></g>
+                    </g>
+                  </g>
+                  <circle class="rim" cx="13" cy="13" r="12" />
+                  <circle class="ring" cx="13" cy="13" r="12" pathLength="100" />
+                </svg>
+              </span>
+              <span class="thinking-words" id="thinking-words" aria-hidden="true">Asking Purdue GenAI Studio…</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="page" id="page-thread-c">
+        <p class="eyebrow">Chat</p>
+        <h2>Network and security summary</h2>
+        <div class="thread">
+          <div class="turn me" title="Wednesday, October 8, 2026 at 4:58 PM"><p>Summarize my network and security status</p></div>
+          <div class="turn them">
+            <p>Your network looks healthy today, with one thing to keep an eye on.</p>
+            <p>LightHouse handled 10 alerts today. Most were low severity, such as devices joining the Wi-Fi. A port scan against the front desk PC was refused by the Windows firewall, so nothing was reached.</p>
+            <p>Next step: make sure Windows Update has run on the front desk PC this week.</p>
+            <div class="turn-actions">
+              <button type="button" class="icon-btn" aria-label="Copy answer" title="Copy" data-copy><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 9h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1V10a1 1 0 0 1 1-1zM5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1" /></svg></button>
+              <button type="button" class="icon-btn" aria-label="Retry answer" title="Retry"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 12a9 9 0 1 0 2.64-6.36L3 8.3M3 3v5.3h5.3" /></svg></button>
+              <time datetime="2026-10-08T20:59:00.000Z" title="Wednesday, October 8, 2026 at 4:59 PM">yesterday</time>
+              <span class="copied" role="status"></span>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- ===================== ALERTS ===================== -->
@@ -538,17 +914,25 @@
         <p class="eyebrow">Alerts</p>
         <h1>Security<br>activity</h1>
         <p class="lede">Open an alert for a plain-English explanation and the steps LightHouse suggests.</p>
-        <div class="chips">
-          <button class="on">All 6</button><button>Open 2</button><button>Resolved 3</button><button>Dismissed 1</button>
+        <div class="chips" id="chips">
+          <button class="on" data-filter="all">All 6</button>
+          <button data-filter="open">Open 3</button>
+          <button data-filter="resolved">Resolved 2</button>
+          <button data-filter="dismissed">Dismissed 1</button>
         </div>
-        <section class="recent">
-          <details class="alert">
+        <section class="recent" id="alert-list">
+          <details class="alert" data-status="open">
             <summary>
               <span class="dot high"></span>
-              <div><span class="sev high">High severity · Low confidence</span><span class="pill get_help">Get help now</span><span class="pill">Open</span>
-                <b>Repeated failed logins from one address</b>
-                <p>14 failed sign-ins to the file server in four minutes, all from 10.0.4.66.</p></div>
-              <span class="when">Today, 11:07 AM</span><span class="chev">&#9662;</span>
+              <div>
+                <span class="sev high">High severity · Low confidence</span>
+                <span class="pill get_help">Get help now</span>
+                <span class="pill">open</span>
+                <b>Repeated failed sign-ins from one address</b>
+                <p>Someone tried to sign in to the file server 14 times in four minutes from 10.0.4.66, and every attempt failed. That pattern looks like a program guessing passwords rather than a person mistyping their own.</p>
+              </div>
+              <span class="when">Today, 11:07 AM</span>
+              <span class="chev" aria-hidden="true">▾</span>
             </summary>
             <div class="detail">
               <div class="guidance get_help">
@@ -563,31 +947,33 @@
                 </ol>
               </div>
               <p class="eyebrow">What this means</p>
-              <p>Fourteen sign-in attempts failed against one server inside four minutes, from an address
-                that has never held a successful session. That rate and that pattern look like someone
-                working through a list of passwords, not a person mistyping their own.</p>
+              <p>Someone tried to sign in to the file server 14 times in four minutes from 10.0.4.66, and every attempt failed. That pattern looks like a program guessing passwords rather than a person mistyping their own.</p>
               <p class="eyebrow">LightHouse’s suggestion — check with your IT provider first</p>
               <ol>
-                <li><b>Block 10.0.4.66 first.</b> Drop it at the firewall, or unplug the device if it sits on your own network. This stops the attempts while you look into it.</li>
-                <li><b>Work out what the device is.</b> It is not in your known-device list. Your router DHCP table will show the lease, and the switch will show which port it is on.</li>
-                <li><b>Reset the password on any account it targeted</b> and turn on lockout after five failed attempts, so a run like this stops itself next time.</li>
-                <li><b>Check whether anything succeeded</b> from that address before the failures began. If it did, treat that account as compromised.</li>
+                <li><b>Block 10.0.4.66 at your router or firewall.</b> That stops the attempts while you look into it.</li>
+                <li><b>Find out what the device at that address is.</b> Your router’s list of connected devices shows its name.</li>
+                <li><b>Change the password on every account it tried.</b> Pick one nobody else knows.</li>
               </ol>
               <div class="actions">
                 <button class="btn">Mark resolved</button>
                 <button class="btn quiet">Dismiss</button>
                 <button class="btn quiet">Ask LightHouse about this</button>
+                <button class="btn quiet" data-evidence>Show evidence</button>
               </div>
-              <p class="ai-note">Written on this appliance by qwen3:8b and checked against the alert schema. Nothing left your network.</p>
+              <p class="ai-note">Written on this appliance and checked against the alert schema. Nothing left your network.</p>
             </div>
           </details>
-          <details class="alert">
+          <details class="alert" data-status="open">
             <summary>
               <span class="dot medium"></span>
-              <div><span class="sev medium">Medium severity · Low confidence</span><span class="pill">Open</span>
-                <b>Unusual DNS activity detected</b>
-                <p>A device made an unusual request. Review the device if this repeats.</p></div>
-              <span class="when">Today, 10:42 AM</span><span class="chev">&#9662;</span>
+              <div>
+                <span class="sev medium">Medium severity · Low confidence</span>
+                <span class="pill">open</span>
+                <b>Unusual DNS activity from front-desk-pc</b>
+                <p>front-desk-pc looked up 214 different names under one web domain in three minutes. Some programs smuggle data out this way, but ad blockers and antivirus updates can look the same.</p>
+              </div>
+              <span class="when">Today, 10:42 AM</span>
+              <span class="chev" aria-hidden="true">▾</span>
             </summary>
             <div class="detail">
               <div class="guidance review">
@@ -596,31 +982,33 @@
                 <p>The explanation below may be wrong, in either direction. Before you change anything, have someone technical (your IT provider or a tech-savvy colleague) look at this alert. Leave it open until they have.</p>
               </div>
               <p class="eyebrow">What this means</p>
-              <p>front-desk-pc asked for 214 different subdomains of a single domain in three minutes.
-                That shape of traffic is one way data gets smuggled out over DNS, but ad blockers,
-                antivirus updaters and content networks produce it too. One burst on its own is usually harmless.</p>
+              <p>front-desk-pc looked up 214 different names under one web domain in three minutes. Some programs smuggle data out this way, but ad blockers and antivirus updates can look the same.</p>
               <p class="eyebrow">Recommended steps</p>
               <ol>
-                <li><b>Find out who was on front-desk-pc at 10:42</b> and what they were doing. That often answers it outright.</li>
-                <li><b>Run a malware scan</b> on that device before you clear the alert.</li>
-                <li><b>If the domain means nothing to you</b>, block it at your DNS resolver and see whether anything on the machine breaks.</li>
-                <li><b>Give it 24 hours.</b> A single burst is noise; the same pattern returning daily is worth escalating.</li>
+                <li><b>Ask who was using front-desk-pc at 10:42.</b> That often explains it straight away.</li>
+                <li><b>Run a full scan in Windows Security on that computer.</b></li>
+                <li><b>If it happens again tomorrow, tell your IT provider.</b></li>
               </ol>
               <div class="actions">
                 <button class="btn">Mark resolved</button>
                 <button class="btn quiet">Dismiss</button>
                 <button class="btn quiet">Ask LightHouse about this</button>
+                <button class="btn quiet" data-evidence>Show evidence</button>
               </div>
-              <p class="ai-note">Written on this appliance by qwen3:8b and checked against the alert schema. Nothing left your network.</p>
+              <p class="ai-note">Written on this appliance and checked against the alert schema. Nothing left your network.</p>
             </div>
           </details>
-          <details class="alert">
+          <details class="alert" data-status="open">
             <summary>
               <span class="dot low"></span>
-              <div><span class="sev">Low severity · Low confidence</span><span class="pill">Resolved</span>
+              <div>
+                <span class="sev low">Low severity · Low confidence</span>
+                <span class="pill">open</span>
                 <b>New device joined the network</b>
-                <p>A new device was observed. Confirm that it belongs to your business.</p></div>
-              <span class="when">Today, 9:18 AM</span><span class="chev">&#9662;</span>
+                <p>A device LightHouse has not seen before connected to your network. Most of the time this is a phone, laptop or printer being switched on.</p>
+              </div>
+              <span class="when">Today, 9:18 AM</span>
+              <span class="chev" aria-hidden="true">▾</span>
             </summary>
             <div class="detail">
               <div class="guidance caution">
@@ -629,95 +1017,105 @@
                 <p><b>Check first:</b> ask whoever uses this device whether they expected this activity at this time. If nobody did, treat the alert as real.</p>
               </div>
               <p class="eyebrow">What this means</p>
-              <p>A device with a hardware address LightHouse has not seen before took an address on your
-                network. Most of the time this is a phone, a laptop or a printer being switched on.</p>
+              <p>A device LightHouse has not seen before connected to your network. Most of the time this is a phone, laptop or printer being switched on.</p>
               <p class="eyebrow">Recommended steps</p>
               <ol>
-                <li><b>Match the hardware address to something you recognise.</b> The first half of it names the manufacturer, which is usually enough.</li>
-                <li><b>If it is yours, give it a name</b> so future alerts read clearly instead of showing a number.</li>
-                <li><b>If it is not yours</b>, remove it from the network and change the Wi-Fi password. Anything that reconnects afterwards is worth a second look.</li>
+                <li><b>Ask your staff whether anyone connected something new this morning.</b></li>
+                <li><b>If nobody did, change the Wi-Fi password.</b> Anything that reconnects afterwards is worth a second look.</li>
               </ol>
               <div class="actions">
-                <button class="btn quiet">Reopen</button>
+                <button class="btn">Mark resolved</button>
+                <button class="btn quiet">Dismiss</button>
                 <button class="btn quiet">Ask LightHouse about this</button>
+                <button class="btn quiet" data-evidence>Show evidence</button>
               </div>
-              <p class="ai-note">Written on this appliance by qwen3:8b and checked against the alert schema. Nothing left your network.</p>
+              <p class="ai-note">Written on this appliance and checked against the alert schema. Nothing left your network.</p>
             </div>
           </details>
-          <details class="alert">
+          <!-- closed alerts keep no guidance banner: a resolved alert telling the
+               owner to call for help "now" is noise -->
+          <details class="alert" data-status="resolved">
             <summary>
               <span class="dot medium"></span>
-              <div><span class="sev medium">Medium severity · High confidence</span><span class="pill">Resolved</span>
+              <div>
+                <span class="sev medium">Medium severity · High confidence</span>
+                <span class="pill">resolved</span>
                 <b>Port scan against the front desk PC</b>
-                <p>A device swept 1,024 ports in under a minute. Blocked at the firewall.</p></div>
-              <span class="when">Yesterday, 4:51 PM</span><span class="chev">&#9662;</span>
+                <p>Another device checked over a thousand network ports on front-desk-pc in under a minute. The Windows firewall refused every one, so nothing was reached.</p>
+              </div>
+              <span class="when">Yesterday, 4:51 PM</span>
+              <span class="chev" aria-hidden="true">▾</span>
             </summary>
             <div class="detail">
               <p class="eyebrow">What this means</p>
-              <p>Something checked a thousand doors on that machine to see which ones open. The firewall
-                refused all of them, so nothing was reached. What matters now is where the scan came from.</p>
+              <p>Another device checked over a thousand network ports on front-desk-pc in under a minute. The Windows firewall refused every one, so nothing was reached.</p>
               <p class="eyebrow">Recommended steps</p>
               <ol>
-                <li><b>Check whether the source was inside your network.</b> An internal scanner usually means that device is already compromised and should come off the network today.</li>
-                <li><b>If it came from outside</b>, confirm no ports are forwarded to that PC from the internet. If none are, the firewall did its job and there is nothing further to do.</li>
-                <li><b>Confirm the machine is patched</b>, since a scan is often the step before an attempt.</li>
+                <li><b>Make sure Windows Update has run on front-desk-pc.</b> A scan is often the step before an attempt.</li>
               </ol>
               <div class="actions">
                 <button class="btn quiet">Reopen</button>
                 <button class="btn quiet">Ask LightHouse about this</button>
+                <button class="btn quiet" data-evidence>Show evidence</button>
               </div>
-              <p class="ai-note">Written on this appliance by qwen3:8b and checked against the alert schema. Nothing left your network.</p>
+              <p class="ai-note">Written on this appliance and checked against the alert schema. Nothing left your network.</p>
             </div>
           </details>
-          <details class="alert">
+          <details class="alert" data-status="resolved">
             <summary>
               <span class="dot low"></span>
-              <div><span class="sev">Low severity · High confidence</span><span class="pill">Resolved</span>
-                <b>Certificate expires in 14 days</b>
-                <p>The internal certificate for the print server needs renewing this month.</p></div>
-              <span class="when">Yesterday, 8:02 AM</span><span class="chev">&#9662;</span>
+              <div>
+                <span class="sev low">Low severity · High confidence</span>
+                <span class="pill">resolved</span>
+                <b>New program set to start with Windows</b>
+                <p>A program on reception-pc added itself to the list of things Windows starts at sign-in. It is the printer software installed on Tuesday.</p>
+              </div>
+              <span class="when">2 days ago</span>
+              <span class="chev" aria-hidden="true">▾</span>
             </summary>
             <div class="detail">
               <p class="eyebrow">What this means</p>
-              <p>Nothing is wrong yet. When the certificate lapses, staff will start seeing security
-                warnings when they print, and some devices will refuse to connect at all.</p>
+              <p>A program on reception-pc added itself to the list of things Windows starts at sign-in. It is the printer software installed on Tuesday.</p>
               <p class="eyebrow">Recommended steps</p>
               <ol>
-                <li><b>Renew it now rather than on the day.</b> Fourteen days is comfortable; the last morning is not.</li>
-                <li><b>Install the new certificate and restart the print service</b> so it is actually picked up.</li>
-                <li><b>Check the new expiry date reads a year out</b>, then set a reminder for eleven months.</li>
+                <li><b>No action needed if you installed new printer software this week.</b> If nobody did, ask your IT provider to look at reception-pc.</li>
               </ol>
               <div class="actions">
                 <button class="btn quiet">Reopen</button>
                 <button class="btn quiet">Ask LightHouse about this</button>
+                <button class="btn quiet" data-evidence>Show evidence</button>
               </div>
-              <p class="ai-note">Written on this appliance by qwen3:8b and checked against the alert schema. Nothing left your network.</p>
+              <p class="ai-note">Written on this appliance and checked against the alert schema. Nothing left your network.</p>
             </div>
           </details>
-          <details class="alert">
+          <details class="alert" data-status="dismissed">
             <summary>
               <span class="dot low"></span>
-              <div><span class="sev">Low severity · High confidence</span><span class="pill">Dismissed</span>
+              <div>
+                <span class="sev low">Low severity · High confidence</span>
+                <span class="pill">dismissed</span>
                 <b>Scheduled backup traffic spike</b>
-                <p>Expected nightly transfer to the backup appliance. Marked as normal.</p></div>
-              <span class="when">2 days ago</span><span class="chev">&#9662;</span>
+                <p>A large transfer left the file server at 2 AM. It matches the size and destination of your nightly backup.</p>
+              </div>
+              <span class="when">3 days ago</span>
+              <span class="chev" aria-hidden="true">▾</span>
             </summary>
             <div class="detail">
               <p class="eyebrow">What this means</p>
-              <p>A large transfer left the file server at 02:00 and matched the size and destination of
-                your nightly backup. This is your own job running, not data leaving unexpectedly.</p>
+              <p>A large transfer left the file server at 2 AM. It matches the size and destination of your nightly backup.</p>
               <p class="eyebrow">Recommended steps</p>
               <ol>
-                <li><b>No action needed.</b> The behaviour is expected.</li>
-                <li><b>Silence it in future</b> by adding a suppression window for that host between 01:45 and 03:00, so real overnight anomalies still stand out.</li>
+                <li><b>No action needed.</b> This is your own backup running.</li>
               </ol>
               <div class="actions">
                 <button class="btn quiet">Reopen</button>
-                <button class="btn quiet">Add suppression window</button>
+                <button class="btn quiet">Ask LightHouse about this</button>
+                <button class="btn quiet" data-evidence>Show evidence</button>
               </div>
-              <p class="ai-note">Written on this appliance by qwen3:8b and checked against the alert schema. Nothing left your network.</p>
+              <p class="ai-note">Written on this appliance and checked against the alert schema. Nothing left your network.</p>
             </div>
           </details>
+          <div class="empty-state" id="alerts-empty" hidden><b>Nothing to review</b><p>No alerts match this filter.</p></div>
         </section>
       </div>
 
@@ -725,68 +1123,68 @@
       <div class="page" id="page-trends">
         <p class="eyebrow">Trends</p>
         <h1>Alert activity<br>over time</h1>
-        <p class="lede">Seven days of triaged alerts, grouped by the severity LightHouse assigned.</p>
+        <p class="lede">The last seven days of triaged alerts, grouped by the severity LightHouse assigned.</p>
         <section class="cards">
-          <div><small>Alerts this week</small><strong>39</strong><p>Up 8 on the week before.</p></div>
-          <div><small>Median triage time</small><strong>1.9s</strong><p>Local model, no network round trip.</p></div>
-          <div><small>Duplicates suppressed</small><strong>112</strong><p>Folded into existing alerts.</p></div>
+          <div><small>Alerts this week</small><strong>35</strong><p>Across the days shown below.</p></div>
+          <div><small>Currently open</small><strong>3</strong><p>Items that have not been resolved.</p></div>
+          <div><small>Duplicates suppressed</small><strong>41</strong><p>Folded into existing alerts.</p></div>
         </section>
 
+        <!-- scale = the busiest day (10), so a unit is 200/10 = 20px -->
         <div class="chart">
           <div class="legend">
-            <span><i></i>Low</span>
-            <span class="m"><i></i>Medium</span>
-            <span class="h"><i></i>High</span>
+            <span><i></i>Low</span><span class="m"><i></i>Medium</span><span class="h"><i></i>High</span>
           </div>
-          <div class="plot">
+          <div class="plot" style="--days:7">
             <div class="grid">
               <i style="top:0"></i><b style="top:0">10</b>
               <i style="top:50%"></i><b style="top:50%">5</b>
               <i style="top:100%"></i><b style="top:100%">0</b>
             </div>
             <div class="col">
-              <span class="m" style="height:18px"><em>Mon &middot; 1 medium</em></span>
-              <span style="height:60px"><em>Mon &middot; 3 low</em></span>
+              <span class="m" style="height:20px"><em>Fri · 1 medium</em></span>
+              <span style="height:60px"><em>Fri · 3 low</em></span>
             </div>
             <div class="col">
-              <span class="m" style="height:38px"><em>Tue &middot; 2 medium</em></span>
-              <span style="height:40px"><em>Tue &middot; 2 low</em></span>
+              <span style="height:40px"><em>Sat · 2 low</em></span>
             </div>
             <div class="col">
-              <span class="h" style="height:18px"><em>Wed &middot; 1 high</em></span>
-              <span class="m" style="height:18px"><em>Wed &middot; 1 medium</em></span>
-              <span style="height:100px"><em>Wed &middot; 5 low</em></span>
+              <span class="m" style="height:20px"><em>Sun · 1 medium</em></span>
+              <span style="height:20px"><em>Sun · 1 low</em></span>
             </div>
             <div class="col">
-              <span class="m" style="height:38px"><em>Thu &middot; 2 medium</em></span>
-              <span style="height:80px"><em>Thu &middot; 4 low</em></span>
+              <span class="m" style="height:40px"><em>Mon · 2 medium</em></span>
+              <span style="height:80px"><em>Mon · 4 low</em></span>
             </div>
             <div class="col">
-              <span class="h" style="height:18px"><em>Fri &middot; 1 high</em></span>
-              <span class="m" style="height:58px"><em>Fri &middot; 3 medium</em></span>
-              <span style="height:120px"><em>Fri &middot; 6 low</em></span>
+              <span class="h" style="height:20px"><em>Tue · 1 high</em></span>
+              <span class="m" style="height:20px"><em>Tue · 1 medium</em></span>
+              <span style="height:100px"><em>Tue · 5 low</em></span>
             </div>
             <div class="col">
-              <span class="m" style="height:18px"><em>Sat &middot; 1 medium</em></span>
-              <span style="height:40px"><em>Sat &middot; 2 low</em></span>
+              <span class="m" style="height:80px"><em>Wed · 4 medium</em></span>
+              <span style="height:120px"><em>Wed · 6 low</em></span>
             </div>
             <div class="col">
-              <span class="m" style="height:38px"><em>Sun &middot; 2 medium</em></span>
-              <span style="height:60px"><em>Sun &middot; 3 low</em></span>
+              <span class="h" style="height:20px"><em>Thu · 1 high</em></span>
+              <span class="m" style="height:20px"><em>Thu · 1 medium</em></span>
+              <span style="height:40px"><em>Thu · 2 low</em></span>
             </div>
           </div>
-          <div class="xaxis"><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span></div>
+          <div class="xaxis" style="--days:7"><span>Fri</span><span>Sat</span><span>Sun</span><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span></div>
           <details class="table">
             <summary>Table view</summary>
             <table>
-              <tr><th>Day</th><th>Low</th><th>Medium</th><th>High</th><th>Total</th></tr>
-              <tr><td>Mon</td><td>3</td><td>1</td><td>0</td><td>4</td></tr>
-              <tr><td>Tue</td><td>2</td><td>2</td><td>0</td><td>4</td></tr>
-              <tr><td>Wed</td><td>5</td><td>1</td><td>1</td><td>7</td></tr>
-              <tr><td>Thu</td><td>4</td><td>2</td><td>0</td><td>6</td></tr>
-              <tr><td>Fri</td><td>6</td><td>3</td><td>1</td><td>10</td></tr>
-              <tr><td>Sat</td><td>2</td><td>1</td><td>0</td><td>3</td></tr>
-              <tr><td>Sun</td><td>3</td><td>2</td><td>0</td><td>5</td></tr>
+              <tbody>
+                <tr><th>Day</th><th>Low</th><th>Medium</th><th>High</th><th>Total</th></tr>
+                <tr><td>Fri</td><td>3</td><td>1</td><td>0</td><td>4</td></tr>
+                <tr><td>Sat</td><td>2</td><td>0</td><td>0</td><td>2</td></tr>
+                <tr><td>Sun</td><td>1</td><td>1</td><td>0</td><td>2</td></tr>
+                <tr><td>Mon</td><td>4</td><td>2</td><td>0</td><td>6</td></tr>
+                <tr><td>Tue</td><td>5</td><td>1</td><td>1</td><td>7</td></tr>
+                <tr><td>Wed</td><td>6</td><td>4</td><td>0</td><td>10</td></tr>
+                <tr><td>Thu</td><td>2</td><td>1</td><td>1</td><td>4</td></tr>
+              </tbody>
             </table>
           </details>
         </div>
@@ -798,51 +1196,77 @@
         <h1>Technical<br>workspace</h1>
         <p class="lede">Raw evidence and model reasoning behind each triaged alert. Analyst and admin only.</p>
         <section class="cards">
-          <div><small>Events ingested</small><strong>18.4k</strong><p>Suricata, Sysmon and Windows Security, last 24 hours.</p></div>
-          <div><small>Model latency</small><strong>1.9s</strong><p>Median, qwen3:8b on this appliance.</p></div>
-          <div><small>Validation failures</small><strong>3</strong><p>Model output rejected by the schema.</p></div>
+          <div><small>Events ingested</small><strong>17,404</strong><p>Across every monitoring source.</p></div>
+          <div><small>Model</small><strong>microsoft_Phi-4-mini-instruct-Q4_K_M.gguf</strong><p>Running locally, no external calls.</p></div>
+          <div><small>Devices seen</small><strong>4</strong><p>Distinct hosts in the alert record.</p></div>
         </section>
 
         <h3>Device activity</h3>
         <table class="list">
-          <tr><th>Device</th><th>Address</th><th>Events</th><th>Last seen</th></tr>
-          <tr><td><b>front-desk-pc</b></td><td>10.0.4.21</td><td>6,204</td><td>2 min ago</td></tr>
-          <tr><td><b>file-server</b></td><td>10.0.4.10</td><td>5,881</td><td>1 min ago</td></tr>
-          <tr><td><b>unknown-66</b></td><td>10.0.4.66</td><td>3,417</td><td>4 min ago</td></tr>
-          <tr><td><b>print-server</b></td><td>10.0.4.32</td><td>1,902</td><td>9 min ago</td></tr>
+          <tbody>
+            <tr><th>Device</th><th>Events</th><th>Last seen</th></tr>
+            <tr><td><b>FILE-SERVER</b></td><td>6,204</td><td>Today, 11:07 AM</td></tr>
+            <tr><td><b>FRONT-DESK-PC</b></td><td>5,881</td><td>Today, 10:42 AM</td></tr>
+            <tr><td><b>RECEPTION-PC</b></td><td>3,417</td><td>Today, 9:18 AM</td></tr>
+            <tr><td><b>OFFICE-LAPTOP</b></td><td>1,902</td><td>Yesterday, 4:51 PM</td></tr>
+          </tbody>
         </table>
+
+        <!-- arrived at from "Show evidence": the record first, introduced in plain
+             words, then the model's working -->
+        <section id="alert-evidence" aria-labelledby="alert-evidence-title">
+          <h3 id="alert-evidence-title" tabindex="-1">Selected alert evidence</h3>
+          <p class="lede"><b>Repeated failed sign-ins from one address</b></p>
+          <p class="muted">What this shows: Someone tried to sign in to the file server 14 times in four minutes from 10.0.4.66, and every attempt failed. That pattern looks like a program guessing passwords rather than a person mistyping their own.</p>
+          <pre class="evidence">{
+  "timestamp": "2026-10-09T15:07:14.512Z",
+  "id": "Security:884213:2026-10-09T15:07:14.512Z",
+  "rule": {
+    "id": "Microsoft-Windows-Security-Auditing:4625",
+    "description": "Microsoft-Windows-Security-Auditing: Failed logon",
+    "level": 7
+  },
+  "agent": {
+    "name": "FILE-SERVER"
+  },
+  "data": {
+    "srcip": "10.0.4.66",
+    "win": {
+      "channel": "Security",
+      "provider": "Microsoft-Windows-Security-Auditing",
+      "event_id": 4625,
+      "record_id": "884213",
+      "eventdata": {
+        "TargetUserName": "administrator",
+        "LogonType": "3",
+        "IpAddress": "10.0.4.66",
+        "WorkstationName": "-"
+      }
+    }
+  }
+}</pre>
+          <h3>Model reasoning</h3>
+          <p class="muted">Event 4625 repeated 14 times against one account in under four minutes, logon type 3 (over the network), from an address with no successful logon on record. The rate fits automated password guessing.</p>
+          <h3>Confidence</h3>
+          <p class="muted">Final: low · Model’s own: low · Guidance: get_help</p>
+          <table class="list">
+            <tbody>
+              <tr><th>Downgrade</th><th>Why</th></tr>
+              <tr><td><b>thin_evidence</b></td><td>Only the failed logons are in the record; nothing shows whether any attempt succeeded.</td></tr>
+            </tbody>
+          </table>
+          <h3>What the model could not determine</h3>
+          <p class="muted">Whether any attempt succeeded, and what the device at 10.0.4.66 is.</p>
+          <h3>MITRE ATT&amp;CK</h3>
+          <p class="muted">T1110 · T1078</p>
+        </section>
 
         <h3>Appliance health</h3>
         <div class="panel">
-          <div class="field"><div><b>Database</b><p>SQLite at /var/lib/lighthouse/lighthouse.db</p></div><span class="pill">Available</span></div>
-          <div class="field"><div><b>Model</b><p>Local Ollama endpoint, no external calls.</p></div><span class="pill">qwen3:8b</span></div>
-          <div class="field"><div><b>Load average</b><p>1 / 5 / 15 minutes.</p></div><span class="pill">0.42 &middot; 0.51 &middot; 0.47</span></div>
-          <div class="field"><div><b>Disk free</b><p>Retention trims raw events after 30 days.</p></div><span class="pill">184 GB</span></div>
+          <div class="field"><div><b>Database</b><p>Local SQLite store for alerts and explanations.</p></div><span class="pill">available</span></div>
+          <div class="field"><div><b>Model</b><p>Runs locally on this computer, no external calls.</p></div><span class="pill">microsoft_Phi-4-mini-instruct-Q4_K_M.gguf</span></div>
+          <div class="field"><div><b>Disk free</b><p>Free space on the drive LightHouse runs from.</p></div><span class="pill">412 GB</span></div>
         </div>
-
-        <h3>Selected alert evidence</h3>
-        <p class="lede">Repeated failed logins from one address &mdash; model reasoning</p>
-        <p class="muted">14 authentication failures against a single host inside four minutes, from an address with
-          no prior successful session. Consistent with credential stuffing rather than a user mistyping a password.</p>
-        <h3>Confidence</h3>
-        <p class="muted">Final: low &middot; Model&rsquo;s own: low &middot; Guidance: get_help</p>
-        <table class="list">
-          <tbody>
-            <tr><th>Downgrade</th><th>Why</th></tr>
-            <tr><td><b>unfamiliar_rule</b></td><td>Rule Microsoft-Windows-Security-Auditing:4740 from the Windows event log is not in LightHouse&rsquo;s tested set.</td></tr>
-          </tbody>
-        </table>
-        <h3>What the model could not determine</h3>
-        <p class="muted">Whether any attempt succeeded: the record covers only the failures.</p>
-        <h3>MITRE ATT&amp;CK</h3>
-        <p class="muted">T1110 Brute Force &middot; T1078 Valid Accounts</p>
-        <pre class="evidence">{
-  "source": "wazuh",
-  "rule": { "id": 5710, "level": 10, "description": "Multiple failed logins" },
-  "agent": { "name": "file-server", "ip": "10.0.4.10" },
-  "data": { "srcip": "10.0.4.66", "attempts": 14, "window_s": 233 },
-  "timestamp": "2026-09-09T11:07:14Z"
-}</pre>
       </div>
 
       <!-- ===================== SETTINGS ===================== -->
@@ -853,28 +1277,40 @@
         <div class="panel">
           <div class="field">
             <div><b>Notification threshold</b><p>The lowest severity that will reach you.</p></div>
-            <select><option>Medium</option><option selected>High</option><option>Critical</option></select>
+            <div class="select" data-select="threshold" data-choices="thresholds" data-value="high" data-label="Notification threshold">
+              <button type="button" class="select-trigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="threshold-menu" aria-label="Notification threshold: High" title="High and critical alerts"><span class="select-dot high"></span><span class="select-label">High</span><span class="select-chevron"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6" /></svg></span></button>
+            </div>
           </div>
           <div class="field">
-            <div><b>Quiet hours</b><p>Alerts still record; they just wait until morning.</p></div>
-            <input type="text" value="22:00 - 07:00" size="14" />
+            <div><b>Alert sensitivity</b><p>How readily borderline activity becomes an alert.</p></div>
+            <div class="select" data-select="sensitivity" data-choices="sensitivities" data-value="balanced" data-label="Alert sensitivity">
+              <button type="button" class="select-trigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="sensitivity-menu" aria-label="Alert sensitivity: Balanced" title="Recommended"><span class="select-icon"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 9h16M4 15h16" /></svg></span><span class="select-label">Balanced</span><span class="select-chevron"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6" /></svg></span></button>
+            </div>
           </div>
           <div class="field">
-            <div><b>Notification address</b><p>Delivery is a later phase; this is stored locally for now.</p></div>
-            <input type="text" value="owner@example.com" size="22" />
-          </div>
-          <div class="field">
-            <div><b>Plain-English explanations</b><p>Show the model's summary above the technical detail.</p></div>
+            <div><b>Plain-English explanations</b><p>Show the model’s summary above the technical detail.</p></div>
             <span class="pill">On</span>
           </div>
         </div>
+        <!-- admin only: the default for everyone. Choosing Local (slow) keeps every
+             question on this computer, and the chat box then offers no online models -->
+        <h3>Chat AI</h3>
+        <div class="panel">
+          <div class="field">
+            <div><b>Default chat model</b><p>For everyone. Online models answer through Purdue GenAI Studio in seconds; your alerts always stay on this computer. Choose Local (slow) to keep every question here.</p></div>
+            <div class="select" data-select="default-model" data-choices="models" data-value="gpt-oss:120b" data-label="Default chat model">
+              <button type="button" class="select-trigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="default-model-menu" aria-label="Default chat model: Thinking" title="Most careful answers. Recommended."><span class="select-icon"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.6 10.8c.7.5 1.1 1.3 1.1 2.1V16h5v-.1c0-.8.4-1.6 1.1-2.1A6 6 0 0 0 12 3z" /></svg></span><span class="select-label">Thinking</span><span class="select-chevron"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6" /></svg></span></button>
+            </div>
+          </div>
+        </div>
+        <p class="notice" role="status" id="chat-model-notice" hidden></p>
         <h3>Monitoring sources</h3>
         <div class="panel">
-          <div class="field"><div><b>Suricata</b><p>Network traffic: known attacks and suspicious connections</p></div><span class="pill">Connected</span></div>
-          <div class="field"><div><b>Sysmon</b><p>This computer: programs starting, network connections, file and registry changes</p></div><span class="pill">Connected</span></div>
-          <div class="field"><div><b>Windows Security log</b><p>Sign-ins, failed sign-ins, account changes and cleared logs</p></div><span class="pill">Connected</span></div>
+          <div class="field"><div><b>Suricata</b><p>Network traffic: known attacks and suspicious connections</p></div><span class="pill">Configured</span></div>
+          <div class="field"><div><b>Sysmon</b><p>This computer: programs starting, network connections, file and registry changes</p></div><span class="pill">Configured</span></div>
+          <div class="field"><div><b>Windows Security log</b><p>Sign-ins, failed sign-ins, account changes and cleared logs</p></div><span class="pill">Configured</span></div>
         </div>
-        <div class="row-end"><button class="btn">Save preferences</button></div>
+        <p class="notice" role="status" id="settings-notice" hidden></p>
       </div>
 
       <!-- ===================== ADMIN ===================== -->
@@ -883,80 +1319,412 @@
         <h1>Local<br>users</h1>
         <p class="lede">Accounts exist only on this appliance. There is no cloud directory to sync with.</p>
         <table class="list">
-          <tr><th>User</th><th>Role</th><th>Last sign-in</th><th></th></tr>
-          <tr><td><b>admin</b></td><td>Admin</td><td>Today, 8:31 AM</td><td><span class="pill">You</span></td></tr>
-          <tr><td><b>r.gotsev</b></td><td>Analyst</td><td>Today, 7:58 AM</td><td></td></tr>
-          <tr><td><b>front-desk</b></td><td>Owner</td><td>Yesterday, 5:12 PM</td><td></td></tr>
+          <tbody>
+            <tr><th>User</th><th>Role</th><th>Password</th><th></th></tr>
+            <tr><td><b>admin</b></td><td>Admin</td><td>Set</td><td><span class="pill">You</span></td></tr>
+            <tr><td><b>it.support</b></td><td>Analyst</td><td>Set</td><td></td></tr>
+            <tr><td><b>dana.front-desk</b></td><td>Owner</td><td>Change required</td><td></td></tr>
+          </tbody>
         </table>
-        <div class="row-end"><button class="btn">Add user</button></div>
+        <!-- open in the frame to show the form; Cancel puts back the "Add user" button -->
+        <div class="panel" id="add-user">
+          <form id="add-user-form">
+            <div class="field">
+              <div><b>Username</b><p>Letters, digits, dot, dash and underscore.</p></div>
+              <input required minlength="3" maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9._-]*" autocomplete="off" aria-label="Username" />
+            </div>
+            <div class="field">
+              <div><b>Temporary password</b><p>At least 12 characters. They replace it at first sign-in.</p></div>
+              <input required minlength="12" maxlength="256" type="password" autocomplete="new-password" aria-label="Temporary password" />
+            </div>
+            <div class="field">
+              <div><b>Access level</b><p>Owners see explanations; analysts and admins also see raw evidence.</p></div>
+              <div class="select" data-select="role" data-choices="roles" data-value="owner" data-label="Access level">
+                <button type="button" class="select-trigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="role-menu" aria-label="Access level: Owner" title="Plain-English explanations"><span class="select-icon"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M15.5 8a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0zM5 20c0-3.6 3.1-6 7-6s7 2.4 7 6" /></svg></span><span class="select-label">Owner</span><span class="select-chevron"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6" /></svg></span></button>
+              </div>
+            </div>
+            <div class="row-end">
+              <button class="btn quiet" type="button" id="add-user-cancel">Cancel</button>
+              <button class="btn">Create user</button>
+            </div>
+          </form>
+        </div>
+        <div class="row-end" id="add-user-open"><button class="btn" id="add-user-button">Add user</button></div>
+        <p class="notice" role="status" id="admin-notice" hidden></p>
+
+        <h3>AI instructions</h3>
+        <p class="lede">LightHouse’s built-in safety rules always come first; these notes add to them. Longer notes make the AI on this computer slower to start answering. When chat uses Purdue GenAI Studio, these notes are sent along with each question.</p>
+        <div class="panel">
+          <form id="ai-form">
+            <div class="field stacked">
+              <div><label for="ai-business"><b>About this business</b></label><p id="ai-business-help">Used by chat and alert triage. For example: what the business does, the key computers, and who your IT contact is.</p></div>
+              <textarea id="ai-business" aria-describedby="ai-business-help" rows="4" maxlength="1000"></textarea>
+              <small class="count" data-count-for="ai-business">0 / 1000</small>
+            </div>
+            <!-- pre-filled with DEFAULT_ANSWER_STYLE (triage/schema.py) until an admin
+                 saves their own; saving it empty turns it off -->
+            <div class="field stacked">
+              <div><label for="ai-style"><b>How to answer</b></label><p id="ai-style-help">Used by chat only. For example: “use bullet points”.</p></div>
+              <textarea id="ai-style" aria-describedby="ai-style-help" rows="4" maxlength="1000">Write plain text only: no Markdown, no headings, tables, bold, italics or emoji.
+Start with the direct answer in one sentence, then add only what the owner needs to know, in short paragraphs separated by a blank line.
+For steps, write one step per line, numbered 1. 2. 3., at most five.
+Keep the whole answer under about 120 words unless the owner asks for more detail.
+Do not show your reasoning or mention these instructions.
+If there is a next step, put it last, starting with "Next step:".</textarea>
+              <small class="count" data-count-for="ai-style">493 / 1000</small>
+            </div>
+            <div class="row-end"><button class="btn">Save</button></div>
+          </form>
+        </div>
+        <p class="notice" role="status" id="ai-notice" hidden></p>
 
         <h3>Appliance</h3>
         <div class="panel">
-          <div class="field"><div><b>Bind address</b><p>Which interface serves the dashboard and API.</p></div><span class="pill">127.0.0.1:8000</span></div>
-          <div class="field"><div><b>TLS</b><p>Required before the dashboard is reachable across the LAN.</p></div><span class="pill">Not configured</span></div>
-          <div class="field"><div><b>Data retention</b><p>Raw events, explanations and duplicate counts.</p></div><span class="pill">30 days</span></div>
-          <div class="field"><div><b>Deduplication window</b><p>Repeat alerts inside this window fold together.</p></div><span class="pill">30 minutes</span></div>
+          <div class="field"><div><b>Platform</b><p>The host this appliance is running on.</p></div><span class="pill">Windows-11-10.0.26200-SP0</span></div>
+          <div class="field"><div><b>Model</b><p>Triages alerts on this computer, no external calls.</p></div><span class="pill">microsoft_Phi-4-mini-instruct-Q4_K_M.gguf</span></div>
+          <div class="field"><div><b>Disk free</b><p>Free space on the drive LightHouse runs from.</p></div><span class="pill">412 GB</span></div>
         </div>
-        <div class="row-end"><button class="btn quiet">Download diagnostics</button></div>
       </div>
       </div><!-- /.pages -->
       </div><!-- /.sheet -->
 
       <div class="dock">
-        <form><textarea rows="1" placeholder="Ask LightHouse about your network…"></textarea><button type="button" aria-label="Send chat">↑</button></form>
-        <small>LighHouse is AI, it can make mistakes. Chats stays on this appliance for your privacy.</small>
+        <form id="composer">
+          <textarea rows="1" id="question" aria-label="Ask LightHouse" placeholder="Ask LightHouse about your network…"></textarea>
+          <!-- shown only when there is more than one model to pick from; opens upward
+               because the chat box sits at the bottom of the screen -->
+          <div class="select up model-pick" data-select="model-pick" data-choices="models" data-value="gpt-oss:120b" data-label="AI model for this question">
+            <button type="button" class="select-trigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="model-pick-menu" aria-label="AI model for this question: Thinking" title="Most careful answers. Recommended."><span class="select-icon"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.6 10.8c.7.5 1.1 1.3 1.1 2.1V16h5v-.1c0-.8.4-1.6 1.1-2.1A6 6 0 0 0 12 3z" /></svg></span><span class="select-label">Thinking</span><span class="select-chevron"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m6 9 6 6 6-6" /></svg></span></button>
+          </div>
+          <button type="submit" id="send" class="send" aria-label="Send chat"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5" /></svg></button>
+        </form>
+        <!-- says plainly where a question goes: the owner opted in to GenAI Studio -->
+        <small id="dock-footer">LightHouse is AI, it can make mistakes. Answers by Purdue GenAI Studio (online); your alerts stay on this computer.</small>
       </div>
     </main>
   </div>
 
   <script>
+    // The overlay is removed once it has played, so its fixed layer never sits over
+    // the app swallowing clicks. Reduced motion hides it outright, so those users
+    // must not be made to wait out an animation they never see.
     const boot = document.getElementById('boot');
     const booted = document.documentElement.classList.contains('booted');
-    // reduced motion hides the boot overlay entirely, so waiting out its 4.8s would just
-    // leave those users staring at a static skeleton
     const reduced = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion:reduce)').matches);
     const quick = booted || reduced;
     try { sessionStorage.setItem('lh-booted', '1'); } catch (e) {}
-    if (boot) setTimeout(() => boot.remove(), quick ? 0 : 4800);
+    if (boot) setTimeout(() => boot.remove(), quick ? 0 : 2600);
 
     const app = document.querySelector('.app');
-    const toggle = document.querySelector('.collapse');
-    toggle.addEventListener('click', () => {
-      const collapsed = app.classList.toggle('collapsed');
-      toggle.title = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
-      toggle.setAttribute('aria-expanded', String(!collapsed));
-    });
-
     const main = document.querySelector('main');
-    const sheet = document.querySelector('.sheet');
-    // stands in for the fetch each page will make against the local API
+    const sheet = document.getElementById('sheet');
+
+    // stands in for the fetch each page makes against the local API
     let pending;
-    const load = (ms) => {
+    const load = (ms, then) => {
       main.classList.add('loading');
       clearTimeout(pending);
-      pending = setTimeout(() => main.classList.remove('loading'), ms);
+      pending = setTimeout(() => { main.classList.remove('loading'); if (then) then(); }, ms);
     };
-    load(quick ? 900 : 4900);
+    load(quick ? 900 : 3300);
 
-    document.querySelectorAll('nav button[data-page]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        document.querySelectorAll('.page').forEach(p => p.classList.remove('on'));
-        document.getElementById('page-' + btn.dataset.page).classList.add('on');
-        main.classList.toggle('with-dock', btn.dataset.page === 'home');
-        sheet.scrollTop = 0;
-        load(650);
+    /* ---- Line icons: the same path data as ICONS in main.tsx, drawn like Icon ---- */
+    const ICONS = {
+      chevron: 'm6 9 6 6 6-6',
+      thinking: 'M9 18h6M10 21h4M12 3a6 6 0 0 0-3.6 10.8c.7.5 1.1 1.3 1.1 2.1V16h5v-.1c0-.8.4-1.6 1.1-2.1A6 6 0 0 0 12 3z',
+      balanced: 'M12 4v16M8 20h8M5 7h14M5 7 2.5 13a2.6 2.6 0 0 0 5 0zM19 7l-2.5 6a2.6 2.6 0 0 0 5 0z',
+      quick: 'M13 2 4.5 13.5H11L10 22l8.5-11.5H12z',
+      local: 'M5.5 5h13A1.5 1.5 0 0 1 20 6.5v8a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 14.5v-8A1.5 1.5 0 0 1 5.5 5zM2 19.5h20',
+      relaxed: 'M4 12h16',
+      moderate: 'M4 9h16M4 15h16',
+      strict: 'M4 6h16M4 12h16M4 18h16',
+      owner: 'M15.5 8a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0zM5 20c0-3.6 3.1-6 7-6s7 2.4 7 6',
+      advanced: 'M17 10.5a6.5 6.5 0 1 1-13 0 6.5 6.5 0 0 1 13 0zM20.5 20.5l-5.3-5.3M6.5 10.5h1.8l1-2.2 2 4.4 1-2.2h1.7',
+      admin: 'M13 8a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0zM3 20c0-3.6 2.9-6 6.5-6 1.3 0 2.5.3 3.5.9M17.5 13 21 14.3v2.6c0 2-1.5 3.4-3.5 4.1-2-.7-3.5-2.1-3.5-4.1v-2.6z',
+    };
+    const icon = (name, size) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="${ICONS[name]}" /></svg>`;
+
+    /* ---- Choice lists: THRESHOLDS, SENSITIVITIES, ROLES and the chat models with
+           MODEL_ICONS, as main.tsx and triage/cloud_model.py define them ---- */
+    const CHOICES = {
+      thresholds: [
+        { value: 'medium', label: 'Medium', note: 'More alerts reach you', severity: 'med' },
+        { value: 'high', label: 'High', note: 'High and critical alerts', severity: 'high' },
+        { value: 'critical', label: 'Critical', note: 'Only the most serious', severity: 'high' },
+      ],
+      sensitivities: [
+        { value: 'relaxed', label: 'Relaxed', note: 'Fewer, surer alerts', icon: 'relaxed' },
+        { value: 'balanced', label: 'Balanced', note: 'Recommended', icon: 'moderate' },
+        { value: 'strict', label: 'Strict', note: 'Flags more borderline activity', icon: 'strict' },
+      ],
+      roles: [
+        { value: 'owner', label: 'Owner', note: 'Plain-English explanations', icon: 'owner' },
+        { value: 'analyst', label: 'Analyst', note: 'Also sees raw evidence', icon: 'advanced' },
+        { value: 'admin', label: 'Admin', note: 'Also manages users and settings', icon: 'admin' },
+      ],
+      models: [
+        { value: 'gpt-oss:120b', label: 'Thinking', note: 'Most careful answers. Recommended.', icon: 'thinking' },
+        { value: 'llama4:latest', label: 'Balanced', note: 'Good answers, a little quicker.', icon: 'balanced' },
+        { value: 'gemma4:26b-a4b', label: 'Quick', note: 'Fastest replies.', icon: 'quick' },
+        { value: 'local', label: 'Local (slow)', note: 'Slower; nothing leaves this computer.', icon: 'local' },
+      ],
+    };
+
+    /* ---- The selector, as Select in main.tsx: a listbox with aria-activedescendant,
+           built only while open (React renders no menu when closed). Arrow keys,
+           Home/End, Enter/Space and Esc work as in a native select; focus returns to
+           the button on close; Tab or a press outside just closes it. ---- */
+    function setupSelect(wrap, onChange) {
+      const choices = CHOICES[wrap.dataset.choices];
+      const label = wrap.dataset.label;
+      const id = wrap.dataset.select;
+      const button = wrap.querySelector('.select-trigger');
+      let menu = null;
+      let active = 0;
+      const mark = choice => choice.severity
+        ? `<span class="select-dot ${choice.severity}"></span>`
+        : choice.icon ? `<span class="select-icon">${icon(choice.icon, 17)}</span>` : '';
+      const paint = () => {
+        const current = choices.find(choice => choice.value === wrap.dataset.value);
+        const name = current ? current.label : wrap.dataset.value;
+        button.innerHTML = (current ? mark(current) : '') + `<span class="select-label">${name}</span><span class="select-chevron">${icon('chevron', 16)}</span>`;
+        button.setAttribute('aria-label', `${label}: ${name}`);
+        if (current && current.note) button.title = current.note; else button.removeAttribute('title');
+      };
+      const paintActive = () => {
+        menu.querySelectorAll('li').forEach((row, index) => {
+          if (index === active) row.className = 'active'; else row.removeAttribute('class');
+        });
+        menu.setAttribute('aria-activedescendant', `${id}-${active}`);
+      };
+      const outside = event => { if (!wrap.contains(event.target)) hide(); };
+      const hide = () => {
+        if (!menu) return;
+        document.removeEventListener('pointerdown', outside);
+        menu.remove();
+        menu = null;
+        button.setAttribute('aria-expanded', 'false');
+      };
+      const close = () => { hide(); button.focus(); };
+      const pick = index => {
+        const choice = choices[index];
+        if (!choice || choice.disabled) return;
+        close();
+        if (choice.value !== wrap.dataset.value) { wrap.dataset.value = choice.value; paint(); if (onChange) onChange(choice); }
+      };
+      // steps over disabled choices; stays put when there is nowhere to go
+      const move = (from, step) => {
+        for (let index = from + step; index >= 0 && index < choices.length; index += step)
+          if (!choices[index].disabled) { active = index; paintActive(); return; }
+      };
+      const keys = event => {
+        if (event.key === 'Tab') { hide(); return; }
+        if (event.key === 'ArrowDown') move(active, 1);
+        else if (event.key === 'ArrowUp') move(active, -1);
+        else if (event.key === 'Home') move(-1, 1);
+        else if (event.key === 'End') move(choices.length, -1);
+        else if (event.key === 'Enter' || event.key === ' ') pick(active);
+        else if (event.key === 'Escape') close();
+        else return;
+        event.preventDefault();
+      };
+      const show = () => {
+        active = Math.max(0, choices.findIndex(choice => choice.value === wrap.dataset.value));
+        menu = document.createElement('ul');
+        menu.className = 'select-menu';
+        menu.id = `${id}-menu`;
+        menu.setAttribute('role', 'listbox');
+        menu.tabIndex = -1;
+        menu.setAttribute('aria-label', label);
+        menu.innerHTML = choices.map((choice, index) =>
+          `<li id="${id}-${index}" role="option" aria-selected="${choice.value === wrap.dataset.value}"${choice.disabled ? ' aria-disabled="true"' : ''}>`
+          + `${mark(choice)}<span class="select-text"><span>${choice.label}</span>${choice.note ? `<small>${choice.note}</small>` : ''}</span></li>`).join('');
+        menu.querySelectorAll('li').forEach((row, index) => {
+          row.addEventListener('pointermove', () => { if (!choices[index].disabled) { active = index; paintActive(); } });
+          row.addEventListener('click', () => pick(index));
+        });
+        menu.addEventListener('keydown', keys);
+        wrap.append(menu);
+        paintActive();
+        button.setAttribute('aria-expanded', 'true');
+        menu.focus();
+        document.addEventListener('pointerdown', outside);
+      };
+      button.addEventListener('click', () => (menu ? close() : show()));
+      button.addEventListener('keydown', event => {
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); if (!menu) show(); }
       });
+      paint();
+      return { set: value => { wrap.dataset.value = value; paint(); } };
+    }
+
+    const say = (id, text) => { const notice = document.getElementById(id); notice.textContent = text; notice.hidden = false; };
+    const selectFor = name => document.querySelector(`[data-select="${name}"]`);
+
+    /* ---- Who answers: the dock's pick decides, as `provider` does in App ---- */
+    let provider = 'purdue';
+    let pickedInDock = false;
+    const footer = document.getElementById('dock-footer');
+    const setProvider = value => {
+      provider = value;
+      footer.textContent = provider === 'purdue'
+        ? 'LightHouse is AI, it can make mistakes. Answers by Purdue GenAI Studio (online); your alerts stay on this computer.'
+        : 'LightHouse is AI, it can make mistakes. Chats stay on this computer for your privacy.';
+      restartWords();
+    };
+
+    setupSelect(selectFor('threshold'), () => say('settings-notice', 'Saved on this appliance.'));
+    setupSelect(selectFor('sensitivity'), () => say('settings-notice', 'Saved on this appliance.'));
+    const rolePick = setupSelect(selectFor('role'));
+    const dockPick = setupSelect(selectFor('model-pick'), choice => {
+      pickedInDock = true;
+      setProvider(choice.value === 'local' ? 'local' : 'purdue');
+    });
+    // a new default reaches the chat box too, unless someone picked there already
+    setupSelect(selectFor('default-model'), choice => {
+      say('chat-model-notice', `Chat now uses ${choice.label} by default, from the next question on.`);
+      if (!pickedInDock) { dockPick.set(choice.value); setProvider(choice.value === 'local' ? 'local' : 'purdue'); }
     });
 
-    document.querySelectorAll('.chips button').forEach(btn => {
-      btn.addEventListener('click', () => {
-        btn.parentElement.querySelectorAll('button').forEach(b => b.classList.remove('on'));
-        btn.classList.add('on');
+    /* ---- The status line beside the loader (ThinkingWords): the first two lines say
+           what is happening and show once, the rest loop ---- */
+    const THINKING_LINES = ['Checking the evidence…', 'Weighing how serious it is…', 'Scanning the horizon…',
+      'Polishing the lens…', 'Charting safe waters…', 'Putting it in plain English…'];
+    const words = document.getElementById('thinking-words');
+    let wordTimer;
+    function restartWords() {
+      const lines = [
+        provider === 'purdue' ? 'Asking Purdue GenAI Studio…' : 'Waking the local AI…',
+        'Reading your recent alerts…',
+        ...THINKING_LINES,
+        ...(provider === 'purdue' ? [] : ['Thinking on this computer. This can take a minute…']),
+      ];
+      let index = 0;
+      words.textContent = lines[0];
+      clearInterval(wordTimer);
+      wordTimer = setInterval(() => { index = index + 1 < lines.length ? index + 1 : 2; words.textContent = lines[index]; }, 2600);
+    }
+    restartWords();
+
+    /* ---- Navigation, as App does it: Home shows the open chat while one is open;
+           only New chat (or a chat row) changes which. Thread b is the one waiting
+           on its answer, so Send is held while it is on screen. ---- */
+    const PENDING = 'b';
+    const FETCHES = ['trends', 'advanced', 'settings', 'admin'];
+    const state = { tab: 'home', activeId: null };
+    const question = document.getElementById('question');
+    const send = document.getElementById('send');
+    function render() {
+      const shown = state.tab === 'home' ? (state.activeId ? `thread-${state.activeId}` : 'home') : state.tab;
+      document.querySelectorAll('.page').forEach(page => page.classList.toggle('on', page.id === `page-${shown}`));
+      document.querySelectorAll('nav button[data-page]').forEach(button => {
+        if (button.dataset.page === state.tab) button.className = 'active'; else button.removeAttribute('class');
       });
+      document.querySelectorAll('.chats .chat-row').forEach(row => row.classList.toggle('active', row.dataset.row === state.activeId));
+      main.classList.toggle('with-dock', state.tab === 'home');
+      question.placeholder = state.activeId ? 'Reply to LightHouse…' : 'Ask LightHouse about your network…';
+      send.disabled = state.tab === 'home' && state.activeId === PENDING;
+    }
+    function go(tab, then) {
+      state.tab = tab;
+      render();
+      sheet.scrollTop = 0;
+      if (FETCHES.includes(tab)) load(650, then); else if (then) then();
+    }
+    document.querySelectorAll('nav button[data-page]').forEach(button => button.addEventListener('click', () => go(button.dataset.page)));
+    document.querySelectorAll('.chats button.chat').forEach(button => button.addEventListener('click', () => {
+      state.activeId = button.dataset.chat;
+      go('home');
+      // the waiting thread is followed down, like the app follows a streaming answer
+      if (state.activeId === PENDING) sheet.scrollTop = sheet.scrollHeight;
+    }));
+    document.getElementById('new-chat').addEventListener('click', () => { state.activeId = null; go('home'); });
+    /* Delete asks first, as the app does; deleting the open thread returns to Home */
+    document.querySelectorAll('.chats .chat-delete').forEach(button => button.addEventListener('click', () => {
+      const row = button.closest('.chat-row');
+      if (!window.confirm('Delete this chat? This can’t be undone.')) return;
+      row.remove();
+      if (state.activeId === row.dataset.row) { state.activeId = null; go('home'); }
+    }));
+    /* Send: the press animation on a send that goes out (the frame sends nothing) */
+    document.getElementById('composer').addEventListener('submit', event => {
+      event.preventDefault();
+      if (send.disabled || !question.value.trim()) return;
+      send.classList.remove('pressed');
+      void send.offsetWidth;
+      send.classList.add('pressed');
+      question.value = '';
+    });
+    send.addEventListener('animationend', () => send.classList.remove('pressed'));
+
+    // "Show evidence" lands on the record, not the top of Advanced, with focus following
+    document.querySelectorAll('[data-evidence]').forEach(button => button.addEventListener('click', () => go('advanced', () => {
+      document.getElementById('alert-evidence').scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'start' });
+      document.getElementById('alert-evidence-title').focus({ preventScroll: true });
+    })));
+
+    /* ---- Collapse: the rail keeps only its toggle; React drops the other rail
+           buttons rather than hiding them, so they leave the document here too ---- */
+    const rail = document.getElementById('rail-top');
+    const toggle = document.getElementById('collapse');
+    const railButtons = [...rail.querySelectorAll('.rail-btn')];
+    toggle.addEventListener('click', () => {
+      const collapsed = app.classList.toggle('collapsed');
+      const name = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+      toggle.title = name;
+      toggle.setAttribute('aria-label', name);
+      toggle.setAttribute('aria-expanded', String(!collapsed));
+      if (collapsed) railButtons.forEach(button => button.remove()); else rail.append(...railButtons);
     });
 
+    /* ---- Alerts filter chips ---- */
+    document.querySelectorAll('#chips button').forEach(chip => chip.addEventListener('click', () => {
+      document.querySelectorAll('#chips button').forEach(other => other.classList.toggle('on', other === chip));
+      let shown = 0;
+      document.querySelectorAll('#alert-list details.alert').forEach(alert => {
+        const match = chip.dataset.filter === 'all' || alert.dataset.status === chip.dataset.filter;
+        alert.hidden = !match;
+        if (match) shown += 1;
+      });
+      document.getElementById('alerts-empty').hidden = shown > 0;
+    }));
+
+    /* ---- Copy under an answer: "Copied" for two seconds, as the thread does ---- */
+    document.querySelectorAll('[data-copy]').forEach(button => button.addEventListener('click', async () => {
+      const turn = button.closest('.turn');
+      const text = [...turn.querySelectorAll(':scope > p')].map(line => line.textContent).join('\n');
+      let ok = false;
+      try { if (navigator.clipboard && navigator.clipboard.writeText) { await navigator.clipboard.writeText(text); ok = true; } } catch (e) { /* reported below */ }
+      const status = turn.querySelector('.copied');
+      status.textContent = ok ? 'Copied' : 'Couldn’t copy';
+      setTimeout(() => { status.textContent = ''; }, 2000);
+    }));
+
+    /* ---- Admin: add-user form and AI instructions ---- */
+    const addUser = document.getElementById('add-user');
+    const addUserOpen = document.getElementById('add-user-open');
+    // inline display, because .row-end's display:flex outranks the hidden attribute
+    const showForm = open => { addUser.style.display = open ? '' : 'none'; addUserOpen.style.display = open ? 'none' : ''; };
+    showForm(true);
+    document.getElementById('add-user-cancel').addEventListener('click', () => { showForm(false); document.getElementById('admin-notice').hidden = true; });
+    document.getElementById('add-user-button').addEventListener('click', () => showForm(true));
+    document.getElementById('add-user-form').addEventListener('submit', event => {
+      event.preventDefault();
+      event.target.reset();
+      rolePick.set('owner');
+      showForm(false);
+      say('admin-notice', 'User created. They will be asked to choose their own password at first sign-in.');
+    });
+    document.querySelectorAll('[data-count-for]').forEach(count => {
+      const box = document.getElementById(count.dataset.countFor);
+      const paint = () => { count.textContent = `${box.value.length} / ${box.maxLength}`; };
+      box.addEventListener('input', paint);
+      paint();
+    });
+    document.getElementById('ai-form').addEventListener('submit', event => {
+      event.preventDefault();
+      say('ai-notice', 'Saved. LightHouse uses these from the next answer on.');
+    });
   </script>
 </body>
 </html>

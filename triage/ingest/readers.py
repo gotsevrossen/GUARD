@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
 from ..schema import NormalizedAlert, Severity, Source
 
+logger = logging.getLogger(__name__)
 
 def _as_int(value: Any) -> int | None:
     try:
@@ -43,6 +45,30 @@ def wazuh_severity(rule: dict[str, Any]) -> Severity:
     return Severity.LOW
 
 
+MITRE_MAX_IDS = 20
+
+
+def suricata_mitre(alert: dict[str, Any]) -> list[str]:
+    """MITRE ATT&CK technique ids from a Suricata alert's rule metadata.
+
+    Emerging Threats rules write `metadata: {"mitre_technique_id": ["T1046"]}`
+    (every metadata value is a list of strings); `metadata.mitre` as a list of
+    {"technique_id": ...} objects is accepted too. The record is attacker-shaped,
+    so anything else (null, a list, numbers) yields nothing instead of raising.
+    """
+    metadata = alert.get("metadata")
+    if not isinstance(metadata, dict):
+        return []
+    found: list[Any] = []
+    mitre = metadata.get("mitre")
+    if isinstance(mitre, list):
+        found.extend(entry.get("technique_id") for entry in mitre if isinstance(entry, dict))
+    technique = metadata.get("mitre_technique_id")
+    found.extend(technique if isinstance(technique, list) else [technique])
+    ids = [value.strip() for value in found if isinstance(value, str) and value.strip()]
+    return list(dict.fromkeys(ids))[:MITRE_MAX_IDS]
+
+
 def parse_record(source: Source, raw: dict[str, Any]) -> NormalizedAlert:
     """Convert native JSON records into the one shape used downstream.
 
@@ -61,7 +87,7 @@ def parse_record(source: Source, raw: dict[str, Any]) -> NormalizedAlert:
                 source_ip=raw.get("src_ip"), destination_ip=raw.get("dest_ip"),
                 device=raw.get("src_ip"), rule_id=f"eve:{event_type}",
                 sensor_severity=Severity.LOW, raw=raw)
-        mitre = [entry.get("technique_id") for entry in alert.get("metadata", {}).get("mitre", []) if entry.get("technique_id")]
+        mitre = suricata_mitre(alert)
         return NormalizedAlert(source=source, source_event_id=str(raw.get("flow_id", "")) or None,
             timestamp=raw["timestamp"], title=alert.get("signature", "Unnamed Suricata alert"), source_ip=raw.get("src_ip"),
             destination_ip=raw.get("dest_ip"), rule_id=str(alert.get("signature_id", "")) or None, mitre=mitre,
@@ -86,11 +112,30 @@ def parse_record(source: Source, raw: dict[str, Any]) -> NormalizedAlert:
     raise ValueError(f"Unsupported source: {source}")
 
 
+def parse_line(source: Source, line: str, line_number: int) -> NormalizedAlert | None:
+    """One sensor log line, or None (logged) when it cannot be used.
+
+    Catches everything, not just the expected parse errors: the line is
+    attacker-controlled, and one shaped to raise something unforeseen (a JSON array,
+    a null where an object belongs) must cost that record, never the reader. The
+    line itself is never logged at warning level, for the same reason.
+    """
+    try:
+        return parse_record(source, json.loads(line))
+    except Exception as error:
+        logger.warning("Skipping unreadable %s record (line %d read since the log was opened): %s",
+                       source, line_number, type(error).__name__)
+        logger.debug("Unreadable %s record detail", source, exc_info=True)
+        return None
+
+
 async def tail_json_lines(path: Path, source: Source) -> AsyncIterator[NormalizedAlert]:
     """Tail a JSON-lines file. Caller owns retry/restart policy for rotated files."""
-    with path.open(encoding="utf-8") as handle:
+    # errors="replace": a stray non-UTF-8 byte spoils one record, not the reader.
+    with path.open(encoding="utf-8", errors="replace") as handle:
         handle.seek(0, 2)
         pending = ""
+        lines = 0
         while True:
             chunk = handle.readline()
             if not chunk:
@@ -102,7 +147,7 @@ async def tail_json_lines(path: Path, source: Source) -> AsyncIterator[Normalize
                 # rather than trying to parse half a JSON object.
                 continue
             line, pending = pending, ""
-            try:
-                yield parse_record(source, json.loads(line))
-            except (ValueError, json.JSONDecodeError):
-                continue
+            lines += 1
+            alert = parse_line(source, line, lines)
+            if alert is not None:
+                yield alert

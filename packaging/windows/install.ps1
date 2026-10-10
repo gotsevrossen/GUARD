@@ -86,7 +86,9 @@ function Assert-Dependency([string]$Path, [string]$Name) {
         Assert-Publisher $Path @('Microsoft Corporation')
     } elseif ($Name -eq 'Sysmon.zip') {
         Assert-SysmonArchive $Path "$DataDir\cache\sysmon-verify"
-    } elseif ($Name -match '\.(exe|msi|zip|gguf)$') {
+    } elseif ($Name -match '\.(exe|msi|zip|gguf|xml)$') {
+        # Pinned downloads, including the commit-pinned Sysmon configuration. The ET
+        # Open rules archive (.tar.gz) changes daily and has no hash to pin.
         Assert-FileHash $Path $dependencyHashes.$Name $hash
     }
 }
@@ -187,15 +189,36 @@ try {
     # Model and OllamaPort in configurations from earlier releases are ignored.
     $config = Get-Content $configPath -Raw | ConvertFrom-Json
     if ([int]$config.ApiPort -lt 1024 -or [int]$config.ApiPort -gt 65535) { throw 'ApiPort must be in 1024..65535.' }
-    # Earlier releases put Suricata at the root of the Windows drive. If LightHouse
-    # now lives on another drive, Suricata moves next to it. Only LightHouse's own old
-    # default is moved; a folder the operator chose is left where it is.
-    $relocateSuricata = ($config.SuricataDir -in @('C:\Suricata', "$env:SystemDrive\Suricata")) -and
-        ([IO.Path]::GetPathRoot($config.SuricataDir) -ne [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($AppDir)))
+    # The dashboard shortcut and setup's Finish page run as the signed-in user, who
+    # cannot read the admin-only windows.json, so the port is copied here: <app>\setup
+    # is readable by Users and writable only by administrators. Only the port, never
+    # anything secret.
+    Set-Content -LiteralPath "$AppDir\setup\api-port.txt" -Value ([int]$config.ApiPort) -Encoding ascii
+    # Earlier releases put Suricata at the root of the Windows drive, where every
+    # signed-in user may add files to a new folder, while suricata.exe runs as
+    # LocalSystem. It moves into the locked program folder, on any drive. So does a
+    # Suricata inside the previous program folder when LightHouse itself moved, since
+    # that folder is deleted at the end. Only LightHouse's own locations are moved; a
+    # folder the operator chose stays where it is and gets the program folder's
+    # protection (Protect-SuricataDirectory).
+    $relocateSuricata = ($config.SuricataDir -in @('C:\Suricata', "$env:SystemDrive\Suricata")) -or
+        ($PreviousAppDir -and (Test-PathInside $config.SuricataDir $PreviousAppDir) -and !(Test-PathInside $config.SuricataDir $AppDir))
     $oldSuricataDir = $config.SuricataDir
     if ($relocateSuricata) {
         $config.SuricataDir = Join-Path $AppDir 'Suricata'
         $config | ConvertTo-Json | Set-Content $configPath -Encoding utf8
+    }
+    if (!(Test-PathInside $config.SuricataDir $AppDir)) {
+        Assert-SuricataLocation $config.SuricataDir $AppDir $DataDir
+        if (Test-Path -LiteralPath $config.SuricataDir) {
+            # An existing folder outside the program folder: what is in it will run as
+            # LocalSystem, so it is reused only if nobody but administrators and SYSTEM
+            # could have changed it. Checked before its permissions are reset.
+            try { Assert-TrustedTree $config.SuricataDir }
+            catch { throw "SuricataDir $($config.SuricataDir) could be changed by non-administrators, so its files cannot be trusted to run as SYSTEM ($_). Uninstall Suricata in Apps & features, delete that folder, and run setup again." }
+        }
+        # Locked (created locked if new) before the MSI writes into it.
+        Protect-SuricataDirectory $config.SuricataDir $AppDir $DataDir
     }
     if (!(Get-Service npcap -ErrorAction SilentlyContinue)) {
         if ($config.NpcapOemInstaller) {
@@ -229,12 +252,16 @@ try {
     }
     $repair = if ($suricataInstalled) { 'REINSTALL=ALL REINSTALLMODE=vomus' } else { '' }
     Run 'msiexec.exe' "/i `"$suricataMsi`" /qn /norestart $repair INSTALLDIR=`"$($config.SuricataDir)`" /L*v `"$DataDir\logs\suricata-msi.log`""
+    # Whatever the MSI wrote, and wherever, gets the program folder's protection.
+    Protect-SuricataDirectory $config.SuricataDir $AppDir $DataDir
     $suricataExe = Get-ChildItem $config.SuricataDir -Filter suricata.exe -Recurse | Select-Object -First 1
     if (!$suricataExe) { throw "Suricata not found in $($config.SuricataDir)" }
     $sysmonZip = Fetch 'https://download.sysinternals.com/files/Sysmon.zip' 'Sysmon.zip'
     Expand-Archive $sysmonZip "$AppDir\tools\sysmon" -Force
     if (!(Test-Path "$DataDir\config\sysmon.xml")) {
-        $rules = Fetch 'https://raw.githubusercontent.com/SwiftOnSecurity/sysmon-config/master/sysmonconfig-export.xml' 'swift-sysmon.xml'
+        # Pinned to one reviewed commit and checked against dependency-hashes.json: the
+        # branch can change at any time, and this file decides what Sysmon records.
+        $rules = Fetch 'https://raw.githubusercontent.com/SwiftOnSecurity/sysmon-config/1836897f12fbd6a0a473665ef6abc34a6b497e31/sysmonconfig-export.xml' 'sysmonconfig-export-1836897f.xml'
         Copy-Item $rules "$DataDir\config\sysmon.xml"
     }
     $sysmonSwitch = if (Get-Service Sysmon64,Sysmon -ErrorAction SilentlyContinue) { '-c' } else { '-i' }
@@ -305,7 +332,21 @@ try {
         $aiNote = ' Local AI triage is unavailable because this CPU lacks AVX2; monitoring runs and alerts are kept for human review.'
         Write-Warning $aiNote.Trim()
     }
-    $rules = Fetch 'https://rules.emergingthreats.net/open/suricata-7.0.3/emerging.rules.tar.gz' 'emerging.rules.tar.gz'
+    # ET Open publishes new rules at this fixed address every day, so they are fetched
+    # again on every run (setup, repair and "Update now"); a cached copy would be
+    # reused forever. The last good copy is kept only for a repair without internet.
+    $rulesCache = "$DataDir\cache\emerging.rules.tar.gz"
+    $rulesFallback = "$DataDir\cache\emerging.rules.previous.tar.gz"
+    if (Test-Path -LiteralPath $rulesCache) { Move-Item -LiteralPath $rulesCache -Destination $rulesFallback -Force }
+    try {
+        $rules = Fetch 'https://rules.emergingthreats.net/open/suricata-7.0.3/emerging.rules.tar.gz' 'emerging.rules.tar.gz'
+        Remove-Item -LiteralPath $rulesFallback -Force -ErrorAction SilentlyContinue
+    } catch {
+        if (!(Test-Path -LiteralPath $rulesFallback)) { throw }
+        Write-Warning "Could not download the latest Emerging Threats rules ($_); using the copy from the previous setup."
+        Move-Item -LiteralPath $rulesFallback -Destination $rulesCache -Force
+        $rules = $rulesCache
+    }
     $vendorYaml = Get-ChildItem $config.SuricataDir -Filter suricata.yaml -Recurse | Select-Object -First 1
     if (!$vendorYaml) { throw 'Suricata vendor YAML missing.' }
     & $python "$AppDir\setup\configure_suricata.py" $vendorYaml.FullName "$DataDir\config\suricata.yaml" $configPath $DataDir $rules

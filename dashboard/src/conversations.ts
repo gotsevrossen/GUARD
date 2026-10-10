@@ -5,7 +5,9 @@
  * as its own entry, which turned a four-question conversation into four rows that
  * all reopened the same place.
  *
- * Everything here is localStorage only: chat never leaves the appliance. */
+ * History is kept in this browser's localStorage only, one list per signed-in user,
+ * so a different account in the same window never sees another user's chats. (What
+ * a question sends to be answered is decided by the server, not stored here.) */
 import { ChatMessage, safeParse } from './api';
 
 /* local: written by the dashboard (a failure notice) or a fixed server notice (AI
@@ -18,7 +20,10 @@ export type Turn = { role: 'me' | 'them'; text: string; local?: boolean; at?: nu
  * up and fences it itself, so the alert's sensor text never travels in the question. */
 export type Conversation = { id: string; title: string; turns: Turn[]; updated: number; alertId?: number };
 
+/* Per user: `lighthouse-chats:<username>`. The bare key is where every user's chats
+ * used to share one list; see migrate(). */
 const KEY = 'lighthouse-chats';
+export const chatsKey = (username: string) => `${KEY}:${username}`;
 const TITLE_LIMIT = 48;
 /* Superseded by KEY: it held individual questions, so carrying it forward would
  * reintroduce exactly the per-message rows this module replaces. */
@@ -50,18 +55,48 @@ const clean = (chat: Conversation): Conversation => {
     ...(local === true || (role === 'them' && text.startsWith(LEGACY_PLACEHOLDER)) ? { local: true } : {}),
     ...(typeof at === 'number' && Number.isFinite(at) ? { at } : {}),
   }));
-  const { alertId, ...rest } = chat;
-  return typeof alertId === 'number' && Number.isSafeInteger(alertId) && alertId >= 0 ? { ...rest, turns, alertId } : { ...rest, turns };
+  const { alertId, updated, ...rest } = chat;
+  const base = { ...rest, updated: typeof updated === 'number' && Number.isFinite(updated) ? updated : 0 };
+  return typeof alertId === 'number' && Number.isSafeInteger(alertId) && alertId >= 0 ? { ...base, turns, alertId } : { ...base, turns };
 };
 
-export function loadConversations(): Conversation[] {
-  try { localStorage.removeItem(LEGACY_KEY); } catch { /* a blocked store is not a failure */ }
-  const stored = safeParse<Conversation[]>(KEY, [], value => Array.isArray(value) && value.every(isConversation));
-  return stored.map(clean).sort((a, b) => (b.updated || 0) - (a.updated || 0));
+/* Older dashboards kept one list for everyone in the browser. It moves, once, to the
+ * first user who loads chats here and is then removed, so no later account inherits
+ * it. Should that user already have a list (a downgrade wrote the old key again), the
+ * old threads are added to theirs rather than lost. */
+function migrate(key: string): void {
+  try {
+    const legacy = localStorage.getItem(KEY);
+    if (legacy === null) return;
+    const current = localStorage.getItem(key);
+    if (current === null) localStorage.setItem(key, legacy);
+    else {
+      const mine = JSON.parse(current) as unknown;
+      const theirs = JSON.parse(legacy) as unknown;
+      if (Array.isArray(mine) && Array.isArray(theirs)) {
+        const ids = new Set(mine.map(chat => (chat as Conversation | null)?.id));
+        localStorage.setItem(key, JSON.stringify([...mine, ...theirs.filter(chat => !ids.has((chat as Conversation | null)?.id))]));
+      }
+    }
+    localStorage.removeItem(KEY);
+  } catch {
+    /* unreadable old list or blocked store: drop the shared key so it cannot leak to another user */
+    try { localStorage.removeItem(KEY); } catch { /* a blocked store is not a failure */ }
+  }
 }
 
-export function saveConversations(chats: Conversation[]): void {
-  try { localStorage.setItem(KEY, JSON.stringify(chats)); } catch { /* a private or full store must not break chat */ }
+/* Each thread is checked on its own, so one malformed thread costs only itself, never
+ * the whole history. */
+export function loadConversations(username: string): Conversation[] {
+  try { localStorage.removeItem(LEGACY_KEY); } catch { /* a blocked store is not a failure */ }
+  const key = chatsKey(username);
+  migrate(key);
+  const stored = safeParse<unknown[]>(key, [], value => Array.isArray(value));
+  return stored.filter(isConversation).map(chat => clean(chat as Conversation)).sort((a, b) => b.updated - a.updated);
+}
+
+export function saveConversations(username: string, chats: Conversation[]): void {
+  try { localStorage.setItem(chatsKey(username), JSON.stringify(chats)); } catch { /* a private or full store must not break chat */ }
 }
 
 export const titleFor = (question: string) => {
@@ -122,6 +157,6 @@ export const fullTime = (at: number) => {
   return Number.isNaN(then.getTime()) ? '' : then.toLocaleString([], { dateStyle: 'full', timeStyle: 'short' });
 };
 
-/* crypto.randomUUID is absent over plain HTTP on some browsers, and this dashboard
- * is served over HTTP on the LAN until TLS is configured. */
+/* crypto.randomUUID needs a secure context. 127.0.0.1 normally counts as one, but an
+ * unusual browser setup must not stop chat, so there is a fallback. */
 export const newId = () => (globalThis.crypto?.randomUUID?.() ?? `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`);

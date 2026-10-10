@@ -1,5 +1,7 @@
 # Backend completion requirements
 
+> **Legacy (Linux appliance era); not current.** This document describes the original Linux appliance plan and is kept for history only. LightHouse is now Windows-only; see [windows-install.md](windows-install.md) and the README for the current product.
+
 This document lists the information and access needed to run, validate, and complete LightHouse's backend on the planned Linux VM.
 
 ## Required before backend validation

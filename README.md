@@ -2,7 +2,7 @@
 
 LightHouse gives a small business SOC-style security monitoring without needing a security background. It watches your network and your Windows computer, has an on-device AI read every alert, and shows a plain-English explanation and one concrete next step in a dashboard.
 
-**Nothing leaves your machine.** The monitoring data, the alerts and the AI all stay on the computer LightHouse is installed on. There is no cloud service and no account to create.
+**Your monitoring data stays on your machine.** The monitoring data, the alerts and the AI that triages them all stay on the computer LightHouse is installed on. There is no cloud service and no account to create. Only two things ever go online: the update check (a plain request to GitHub that sends nothing about your computer or alerts), and chat, but only if an admin turns on the optional [Purdue GenAI Studio chat](#optional-faster-smarter-chat-with-purdue-genai-studio).
 
 LightHouse is a Windows application. The older Linux build is no longer maintained; see [Legacy: Linux and appliance deployments](#legacy-linux-and-appliance-deployments).
 
@@ -17,7 +17,7 @@ LightHouse is a Windows application. The older Linux build is no longer maintain
 | **Virtual machines** | Give the VM a fixed **8192 MB** and **turn Dynamic Memory off** (Hyper-V: *Settings → Memory*). With Dynamic Memory, the AI model can fail to load because it needs its memory all at once. |
 | **CPU** | x64 with **AVX2** for the local AI (most Intel CPUs from 2013 on, AMD Zen and later). Without AVX2, LightHouse still monitors and keeps every alert, marked for a person to review. |
 | **Disk** | Several GB free on the drive you install to: the program, its data, the 2.5 GB AI model and Suricata all go there. It must be an **internal NTFS drive** (not USB, network, FAT32 or exFAT). About 100 MB always goes on the Windows drive: the Npcap driver, the Visual C++ runtime, Sysmon and the Windows event logs. |
-| **Internet** | **During setup only**, to download Suricata, Sysmon, Npcap, the detection rules, the Visual C++ runtime and the AI model. LightHouse does not need the internet afterwards. |
+| **Internet** | **During setup**, to download Suricata, Sysmon, Npcap, the detection rules, the Visual C++ runtime and the AI model. Monitoring and alert triage don't need the internet afterwards. When online, LightHouse checks GitHub for updates, and each setup or update downloads the latest detection rules. The optional GenAI Studio chat needs it too. |
 | **Rights** | An administrator account to install. |
 
 ---
@@ -35,7 +35,7 @@ LightHouse is a Windows application. The older Linux build is no longer maintain
 6. Wait. Setup installs the sensors and downloads the AI model, which can take a while on a slow connection.
 7. On the last page, leave **Open the LightHouse dashboard** ticked and click **Finish**.
 
-LightHouse runs in the background and starts with Windows, so there is nothing to launch. To open the dashboard again, use the **LightHouse Dashboard** shortcut on the desktop or in the Start menu. It opens in its own window, with no address bar or tabs and its own taskbar icon, like an app. To keep it on the taskbar, right-click **LightHouse Dashboard** in the Start menu and choose **Pin to taskbar**. Don't pin the open window itself: that pin skips the shortcut, so it can't start LightHouse again after a shut down. You can also go to `http://127.0.0.1:8000` in any browser.
+LightHouse runs in the background and starts with Windows, so there is nothing to launch. To open the dashboard again, use the **LightHouse Dashboard** shortcut on the desktop or in the Start menu. It opens in its own window, with no address bar or tabs and its own taskbar icon, like an app. To keep it on the taskbar, right-click **LightHouse Dashboard** in the Start menu and choose **Pin to taskbar**. Don't pin the open window itself: that pin skips the shortcut, so it can't start LightHouse again after a shut down. You can also go to `http://127.0.0.1:8000` in any browser (or the port set as `ApiPort` in `windows.json`, if you changed it).
 
 **Shutting down:** admins can choose **Shut down** on the Home page. Monitoring, the local AI and the dashboard stop, and stay off after a restart. Windows' own event logging and Sysmon keep recording, so LightHouse catches up on what happened when it starts again. To start it, open **LightHouse Dashboard** from the Start menu or desktop. No admin rights are needed, and monitoring comes back on if it was running before.
 
@@ -112,7 +112,7 @@ Analysts and admins also see why confidence was lowered, and what the AI said it
 
 ### Ask LightHouse (chat)
 
-The chat box at the bottom of Home answers questions using the same on-device AI. Nothing is sent anywhere.
+The chat box at the bottom of Home answers questions using the same on-device AI. Unless an admin turns on GenAI Studio (below), nothing is sent anywhere.
 
 - **Ask about one alert:** open the alert and click **Ask LightHouse about this**. The chat is then linked to that alert, follow-up questions included.
 - **Ask in general:** type in the box, or pick one of the common questions. LightHouse uses your most recent open alerts as context.
@@ -132,14 +132,11 @@ To turn it on, open **PowerShell as administrator** and run:
 ```powershell
 $app = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' | Where-Object DisplayName -like 'LightHouse*').InstallLocation
 & "$app\runtime\python.exe" -m triage.cloud_key set        # paste your key; it isn't shown
-# Ingestion depends on the API service, so -Force restarts both; then bring
-# ingestion back if it was running (it stays off while monitoring is paused).
-$ingest = (Get-Service LightHouse-Ingestion).Status
-Restart-Service LightHouse-API -Force
-if ($ingest -eq 'Running') { Start-Service LightHouse-Ingestion }
 ```
 
-Then choose the model on the **Admin** page, under **Chat AI**. The choices are GPT-OSS 120B (recommended), Gemma 4 26B (fastest), Llama 3.3 70B, Llama 4, or **On this computer only**, which keeps chat local even with a key stored. A change applies from the next question, with no restart needed.
+Chat uses the key from the next question; no restart is needed. `cloud_key clear` takes effect the same way.
+
+Then choose the default model on the **Settings** page (admins only), under **Chat AI**. The choices are **Thinking** (GPT-OSS 120B, recommended), **Balanced** (Llama 4), **Quick** (Gemma 4 26B), or **Local (slow)**, which keeps chat on this computer even with a key stored. A change applies from the next question, with no restart needed. While the default is an online model, anyone can pick a different one for a question with the selector beside the chat box's Send button; while it is **Local (slow)**, the chat box offers no online models.
 
 Create the key in GenAI Studio under your avatar → **Settings → Account → API Keys**. LightHouse stores it encrypted with Windows' own data protection, in its admin-only data folder, so a copy taken to another computer is useless. It's only ever sent to `genai.rcac.purdue.edu`, over HTTPS, and is never shown, logged or put in the dashboard. To check whether it's set, use `cloud_key status`. To turn it off, use `cloud_key clear`, then restart the service. If you think the key leaked, delete it in GenAI Studio and create a new one. GenAI Studio is for Purdue students, faculty and staff, and the key is tied to your account, so never put it in an installer or share it.
 
@@ -154,11 +151,21 @@ A change applies from the next question or the next alert, with no restart neede
 
 ### Roles
 
-- **Owner:** plain-English alerts, trends and personal preferences.
+- **Owner:** plain-English alerts, trends, live monitoring status and personal preferences, including desktop alerts.
 - **Analyst:** everything an owner sees, plus technical evidence and health views.
-- **Admin:** everything an analyst sees, plus user management and the AI instructions.
+- **Admin:** everything an analyst sees, plus user management, the activity log, the AI instructions, the chat model, pausing or shutting down monitoring, and updates.
 
 Roles are enforced by the server. Hiding a tab in the dashboard is presentation, not access control.
+
+**Is it watching?** Home's health card and **Settings → Monitoring sources** show each sensor (network, Sysmon, Windows Security) as **Working**, **Not reporting**, **Paused** or **Not installed**, for every role. This is judged by whether its reader is alive, not by alerts arriving, so a quiet network isn't a fault.
+
+**Desktop alerts:** in **Settings**, choose **Turn on desktop alerts** and pick a **Notification threshold** (medium, high or critical). Alerts at or above it pop up as Windows notifications while the LightHouse window is open, even minimised. They're not shown while it's closed, because the background services can't reach your desktop. The pop-up uses fixed wording and never shows text from the alert itself, since that could be written by an attacker. The setting is per user and per browser.
+
+**Managing users** (Admin page): add a user with an access level (Owner, Analyst or Admin), change someone's level, **Reset password** (they're signed out and must choose a new one at next sign-in), **Sign out** (ends all of their sessions, for example on a lost laptop), or **Remove** them. LightHouse always keeps at least one admin, so it refuses to demote or remove the last one. You can't change or remove your own account; another admin does that. The built-in `admin` account can't be removed (it would come back with a new one-time password), but its level and password can be changed.
+
+**Activity log** (Admin page): who did what, newest first. This covers sign-ins (failed ones too), password changes and resets, user changes, alerts resolved, dismissed or reopened, pausing, resuming or shutting down, AI instruction and chat model changes, GenAI Studio keys set or cleared, and updates started. It's read-only, and alerts are named by number only, never by their (attacker-controllable) titles.
+
+**How long data is kept:** LightHouse doesn't delete anything automatically yet. Alerts, the activity log and other data stay in the database until they're removed.
 
 **Forgot a password?** It can't be shown, only replaced. In **PowerShell as administrator**, run `& "$app\runtime\python.exe" -m triage.reset_password` (`$app` as above). It prints a new password for `admin`, or for the account you name after it, and asks for a new one at the next sign-in.
 
@@ -166,17 +173,17 @@ Roles are enforced by the server. Hiding a tab in the dashboard is presentation,
 
 ## Running setup again, upgrading and uninstalling
 
-**Pausing monitoring** (e.g. taking the laptop home): on **Home**, an admin can click **Pause monitoring**. This stops network capture (Suricata) and alert triage, unloads the AI, and keeps them off even after a restart. **Resume monitoring** turns them back on. While paused, Home says so for every user. The small dashboard service keeps running so the button can turn monitoring back on. Sysmon keeps writing to the Windows event log; LightHouse reads those entries once resumed.
+**Pausing monitoring** (e.g. taking the laptop home): on **Home**, an admin can click **Pause monitoring**. This stops network capture (Suricata) and alert triage, unloads the AI, and keeps them off even after a restart. **Resume monitoring** turns them back on. While paused, Home says so for every user. The small dashboard service keeps running so the button can turn monitoring back on. Sysmon keeps writing to the Windows event log; LightHouse reads those entries once resumed. **Running setup again or choosing Update now turns monitoring back on.** Setup starts every service, so pause again afterwards if you still need it off.
 
 **Updates:** each time an admin opens the dashboard, LightHouse checks GitHub for a newer release (at most every 15 minutes). If there is one, choose **Update now**:
 - LightHouse downloads the new installer from that release.
 - It checks the download against the release's SHA-256 checksum file and refuses anything that doesn't match.
-- It installs the update in the background. The dashboard closes for a few minutes and reloads by itself.
+- It installs the update silently in the background. The dashboard closes for a few minutes and reloads by itself. Like running setup again, this also downloads the latest detection rules and turns paused monitoring back on.
 - Your alerts, accounts and settings are kept.
 
 If the release has no checksum file, or the automatic update fails, the pop-up offers **Open release page** instead; download the installer there and run it. The check is a plain request to GitHub's public releases page and sends nothing about your computer or alerts. Offline, it simply finds nothing.
 
-**Running `LightHouse-Setup.exe` again** repairs or upgrades the install in place; it never makes a second copy. Your alerts, accounts, passwords and settings are kept, and the AI model is reused rather than downloaded again. If setup stopped partway, fix the cause it reports and run it again.
+**Running `LightHouse-Setup.exe` again** repairs or upgrades the install in place; it never makes a second copy. Your alerts, accounts, passwords and settings are kept, and the AI model is reused rather than downloaded again. The Emerging Threats detection rules are downloaded fresh each time; without internet, setup reuses the copy from the last run. If setup stopped partway, fix the cause it reports and run it again.
 
 **Uninstalling** (Windows *Settings → Apps*) removes the LightHouse services and program files. It keeps your data in the `data` folder inside the install folder (alerts, accounts and the AI model), and Suricata in the `Suricata` folder next to it. It also leaves Npcap, Suricata, Sysmon and the Visual C++ runtime installed, since other software may use them. Remove those separately if you want them gone.
 
@@ -242,9 +249,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\dev-update
 It rebuilds the dashboard, copies LightHouse's own code into the installed copy and restarts the services, in seconds. It doesn't touch Python dependencies, Suricata, Sysmon, the AI model or settings. After changing `pyproject.toml`, `uv.lock` or `install.ps1`, run the full installer instead. It's for development only and never part of a release.
 
 **Publishing a release** (so the dashboard's update prompt finds it):
-1. Bump `version` in `pyproject.toml` and `AppVersion` in `packaging/windows/lighthouse.iss`, for example to `0.2.0`.
+1. Bump `version` in `pyproject.toml`, `AppVersion` in `packaging/windows/lighthouse.iss` and `version` in `dashboard/package.json` (and the two top-level `version` fields in `dashboard/package-lock.json`) to the new `X.Y.Z`. `tests/test_windows_installer.py` checks that they match.
 2. Build the installer. The build writes `dist\LightHouse-Setup.exe` and its checksum file `dist\LightHouse-Setup.exe.sha256`.
-3. Publish a GitHub release tagged `v0.2.0` with **both files** attached.
+3. Publish a GitHub release tagged `vX.Y.Z` with **both files** attached.
 
 Installs older than the tag will then offer the update. Without the `.sha256` file, the dashboard can only link to the release page.
 
@@ -275,7 +282,7 @@ Sensor data is treated as attacker-controlled. Only a short, length-capped extra
 - The free Npcap edition can't install silently, so a fully unattended install needs Npcap preinstalled or its OEM installer.
 - `samples/` are format-faithful starters, not captured real-world events.
 
-See `docs/implementation-log.md`, `docs/missing-information.md` and `docs/backend-completion-requirements.md` for implementation status and open decisions.
+Current Windows details are in [docs/windows-install.md](docs/windows-install.md). `docs/implementation-log.md`, `docs/missing-information.md` and `docs/backend-completion-requirements.md` are from the Linux-appliance era and kept for history only; they don't describe the current product.
 
 ---
 

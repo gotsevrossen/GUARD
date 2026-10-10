@@ -35,17 +35,18 @@ GENAI_TIMEOUT = httpx.Timeout(120.0, connect=10.0)
 COOLDOWN_SECONDS = 60.0
 
 
-# What an admin may pick in the dashboard: models from GenAI Studio's list that suit
-# short, careful chat answers (https://docs.rcac.purdue.edu/services/genai/models/),
-# plus keeping chat on this computer. Long-thinking reasoning models (deepseek-r1,
+# What may be picked in the dashboard (the admin's default in Settings, and per
+# question beside the chat box): models from GenAI Studio's list that suit short,
+# careful chat answers (https://docs.rcac.purdue.edu/services/genai/models/), plus
+# keeping chat on this computer. Named by what the owner notices, not by model, so
+# a non-technical owner can choose. Long-thinking reasoning models (deepseek-r1,
 # qwq), coding, vision and tiny models are left out on purpose.
 LOCAL_CHOICE = "local"
 GENAI_MODEL_CHOICES = [
-    {"id": "gpt-oss:120b", "label": "GPT-OSS 120B", "note": "Best answers. Recommended."},
-    {"id": "gemma4:26b-a4b", "label": "Gemma 4 26B", "note": "Fastest replies."},
-    {"id": "llama3.3:70b", "label": "Llama 3.3 70B", "note": "Large, plain conversational style."},
-    {"id": "llama4:latest", "label": "Llama 4", "note": "Balanced general chat."},
-    {"id": LOCAL_CHOICE, "label": "On this computer only", "note": "Slower; nothing leaves this computer."},
+    {"id": "gpt-oss:120b", "label": "Thinking", "note": "Most careful answers. Recommended."},
+    {"id": "llama4:latest", "label": "Balanced", "note": "Good answers, a little quicker."},
+    {"id": "gemma4:26b-a4b", "label": "Quick", "note": "Fastest replies."},
+    {"id": LOCAL_CHOICE, "label": "Local (slow)", "note": "Slower; nothing leaves this computer."},
 ]
 
 

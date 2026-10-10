@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import hashlib
 import json
 import logging
@@ -11,7 +12,7 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 
 from . import health
-from .readers import parse_record
+from .readers import parse_line, parse_record
 from ..schema import Source
 
 logger = logging.getLogger(__name__)
@@ -37,10 +38,16 @@ VOLATILE_FIELDS = frozenset({
     "SourcePort", "SourcePortName", "IpPort", "QueryResults"})
 
 
+def channel_settings() -> tuple[str | None, str | None]:
+    """(Sysmon, Security) channel names from the service settings; None where an
+    empty value switched that input off. The one place these are read, so the
+    readers and the owner's status page cannot disagree about what is watched."""
+    return (os.getenv("LIGHTHOUSE_SYSMON_CHANNEL", "Microsoft-Windows-Sysmon/Operational").strip() or None,
+            os.getenv("LIGHTHOUSE_SECURITY_CHANNEL", "Security").strip() or None)
+
+
 def configured_channels() -> list[str]:
-    return list(dict.fromkeys(value for value in (
-        os.getenv("LIGHTHOUSE_SYSMON_CHANNEL", "Microsoft-Windows-Sysmon/Operational").strip(),
-        os.getenv("LIGHTHOUSE_SECURITY_CHANNEL", "Security").strip()) if value))
+    return list(dict.fromkeys(value for value in channel_settings() if value))
 
 
 def event_identity(xml: str) -> dict:
@@ -196,12 +203,24 @@ async def tail_channel(service, channel: str, *, reader=None, state_dir=None, po
             await asyncio.sleep(max(poll_seconds, 5))
 
 
-async def tail_windows_json_lines(path, source):
+@dataclass
+class TailPosition:
+    """Where a tail_windows_json_lines reader got to: the file it was reading and
+    the offset just past the last whole record. Kept by the caller, so a reader
+    restarted after a failure carries on from there instead of skipping to the end
+    of the log and losing whatever was written in between."""
+    identity: tuple[int, int] | None = None
+    offset: int = 0
+
+
+async def tail_windows_json_lines(path, source, position: TailPosition | None = None):
     """Wait for the sensor, follow partial writes and reopen on rotation/truncate."""
     handle = None
     identity = None
     pending = ""
     first = True
+    lines = 0
+    position = position if position is not None else TailPosition()
     try:
         while True:
             try:
@@ -211,19 +230,23 @@ async def tail_windows_json_lines(path, source):
                     if handle is not None:
                         handle.close()
                     handle = _open_shared_log(path)
-                    identity, pending = current, ""
+                    identity, pending, lines = current, "", 0
                     if first:
-                        handle.seek(0, 2)
+                        if position.identity == current and position.offset <= stat.st_size:
+                            handle.seek(position.offset)  # resuming the same file
+                        else:
+                            handle.seek(0, 2)
                         first = False
                 chunk = handle.readline()
                 if chunk:
                     pending += chunk
                     if pending.endswith("\n"):
                         line, pending = pending, ""
-                        try:
-                            yield parse_record(source, json.loads(line))
-                        except (ValueError, KeyError, TypeError):
-                            logger.warning("Skipping malformed/unsupported EVE record")
+                        lines += 1
+                        position.identity, position.offset = identity, handle.tell()
+                        alert = parse_line(source, line, lines)
+                        if alert is not None:
+                            yield alert
                     continue
             except OSError:
                 if handle is not None:
@@ -236,8 +259,11 @@ async def tail_windows_json_lines(path, source):
 
 
 def _open_shared_log(path):
+    # errors="replace": a stray non-UTF-8 byte (a record cut by rotation, say) spoils
+    # that one record. A decode error would instead escape readline() and, resumed
+    # from the same offset, stop the reader on that byte for good.
     if sys.platform != "win32":
-        return path.open(encoding="utf-8")
+        return path.open(encoding="utf-8", errors="replace")
     import msvcrt
     import win32file
     import win32con
@@ -249,4 +275,4 @@ def _open_shared_log(path):
     except pywintypes.error as error:
         raise OSError(error.winerror, error.strerror, str(path)) from error
     fd = msvcrt.open_osfhandle(native.Detach(), os.O_RDONLY | os.O_BINARY)
-    return os.fdopen(fd, encoding="utf-8")
+    return os.fdopen(fd, encoding="utf-8", errors="replace")

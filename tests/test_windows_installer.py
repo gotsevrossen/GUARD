@@ -1,4 +1,5 @@
-﻿import subprocess
+﻿import re
+import subprocess
 import sys
 from pathlib import Path
 import pytest
@@ -95,7 +96,11 @@ def test_launcher_starts_only_the_api_and_opens_the_dashboard():
     assert "Start-Service 'LightHouse-API'" in code
     assert 'LightHouse-Ingestion' not in code and 'LightHouse-Suricata' not in code
     assert code.count('Start-Service') == 1 and 'Stop-Service' not in code
-    assert "$dashboard = 'http://127.0.0.1:8000'" in code
+    # The port setup copied out of the admin-only windows.json, accepted only as a
+    # port number; 8000 otherwise.
+    assert '$port = 8000' in code and "Join-Path $PSScriptRoot 'api-port.txt'" in code
+    assert "$saved -match '^\\d{4,5}$'" in code and '-ge 1024' in code and '-le 65535' in code
+    assert '$dashboard = "http://127.0.0.1:$port"' in code and '127.0.0.1:8000' not in code
     assert '"$dashboard/health"' in code and '-UseBasicParsing' in code and '-TimeoutSec' in code
     assert '"--app=$dashboard"' in code and 'Start-Process $dashboard' in code
     assert "'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\msedge.exe'" in code
@@ -131,7 +136,7 @@ def test_setup_clears_a_stale_shutdown_marker_before_starting_services():
 def test_touched_scripts_parse():
     if sys.platform != 'win32':
         pytest.skip('PowerShell parser')
-    for name in ('install.ps1', 'open-lighthouse.ps1'):
+    for name in ('install.ps1', 'open-lighthouse.ps1', 'security.ps1', 'uninstall.ps1', 'build.ps1', 'dev-update.ps1'):
         command = ("$e=$null;[System.Management.Automation.Language.Parser]::ParseFile("
                    f"'{WINDOWS / name}',[ref]$null,[ref]$e)|Out-Null;$e.Count")
         result = subprocess.run(['powershell.exe', '-NoProfile', '-Command', command],
@@ -197,6 +202,117 @@ def test_dev_update_only_touches_lighthouse_code():
     assert 'Remove-Item' not in code and 'models' not in code and 'Suricata' not in code
     assert [line for line in code.splitlines() if '\\data' in line] == \
         ['$config = "$app\\data\\config\\windows.json"']
+
+
+def test_existing_install_is_recognised_only_by_inno_record():
+    """A setup\\install.ps1 inside a folder is easy to fake on a second drive's root."""
+    iss = (WINDOWS / 'lighthouse.iss').read_text(encoding='utf-8')
+    start = iss.index('function SafeTarget')
+    safe = iss[start:iss.index('end;\n', iss.index('FindClose', start))]
+    assert 'install.ps1' not in safe and 'FileExists' not in safe
+    assert 'Result := WizardForm.PrevAppDir;' in iss
+    assert iss.count('not SafeTarget(') == 2 and iss.count('not SameDir(Dir, PreviousAppDir)') == 1
+    # The owner is reset on the whole tree before anything is copied in.
+    assert "/setowner *S-1-5-32-544 /T /C /Q" in iss[iss.index('function PrepareToInstall'):]
+
+
+def test_program_tree_owner_is_reset_and_checked_item_by_item():
+    security = (WINDOWS / 'security.ps1').read_text(encoding='utf-8')
+    protect = security[security.index('function Protect-AppDirectory'):security.index('function Test-PathInside')]
+    assert protect.index("/setowner '*S-1-5-32-544' /T /C /Q") < protect.index('/reset /T /C /Q')
+    assert protect.index('/reset /T /C /Q') < protect.index('Assert-TrustedTree $full $Except')
+    tree = security[security.index('function Assert-TrustedTree'):security.index('function Protect-AppDirectory')]
+    assert 'Assert-TrustedItem $item' in tree and '$root -and $child.Name -in $Except' in tree
+
+
+def test_suricata_is_protected_wherever_it_is():
+    """suricata.exe runs as LocalSystem; C:\\ lets every user add files to new folders."""
+    install = (WINDOWS / 'install.ps1').read_text(encoding='utf-8')
+    security = (WINDOWS / 'security.ps1').read_text(encoding='utf-8')
+    # The legacy default moves into the program folder on any drive, not only when the drive changed.
+    relocate = install[install.index('$relocateSuricata ='):install.index('$oldSuricataDir =')]
+    assert 'GetPathRoot' not in relocate and 'Test-PathInside $config.SuricataDir $PreviousAppDir' in relocate
+    # An existing folder outside the program folder must be trusted before reuse...
+    outside = install[install.index('if (!(Test-PathInside $config.SuricataDir $AppDir)) {'):install.index('if (!(Get-Service npcap')]
+    assert outside.index('Assert-SuricataLocation') < outside.index('Assert-TrustedTree $config.SuricataDir') \
+        < outside.index('Protect-SuricataDirectory')
+    # ...and whatever the MSI wrote is protected afterwards, wherever it is.
+    after = install[install.index("Run 'msiexec.exe' \"/i"):]
+    assert after.index('Protect-SuricataDirectory $config.SuricataDir $AppDir $DataDir') < after.index('$suricataExe =')
+    guard = security[security.index('function Assert-SuricataLocation'):security.index('function Protect-SuricataDirectory')]
+    for refusal in ('internal NTFS drive', 'not the root of drive', 'must not be or contain the LightHouse folder',
+                    'outside the LightHouse data folder'):
+        assert refusal in guard
+    assert 'Protect-AppDirectory $full' in security[security.index('function Protect-SuricataDirectory'):]
+
+
+def test_detection_rules_are_refreshed_on_every_run_with_offline_fallback():
+    install = (WINDOWS / 'install.ps1').read_text(encoding='utf-8')
+    rules = install[install.index('$rulesCache ='):install.index('$vendorYaml =')]
+    order = [rules.index('Move-Item -LiteralPath $rulesCache -Destination $rulesFallback'),
+             rules.index("Fetch 'https://rules.emergingthreats.net/"),
+             rules.index('Remove-Item -LiteralPath $rulesFallback')]
+    assert order == sorted(order)
+    fallback = rules[rules.index('} catch {'):]
+    assert 'if (!(Test-Path -LiteralPath $rulesFallback)) { throw }' in fallback
+    assert 'Move-Item -LiteralPath $rulesFallback -Destination $rulesCache' in fallback
+
+
+def test_sysmon_configuration_is_commit_pinned_and_hashed():
+    import json
+    import re
+    install = (WINDOWS / 'install.ps1').read_text(encoding='utf-8')
+    hashes = json.loads((WINDOWS / 'dependency-hashes.json').read_text(encoding='utf-8'))
+    match = re.search(r"Fetch '(https://raw\.githubusercontent\.com/SwiftOnSecurity/sysmon-config/[^']+)' '([^']+)'", install)
+    url, name = match.groups()
+    assert re.search(r'/sysmon-config/[0-9a-f]{40}/', url) and '/master/' not in url
+    assert re.fullmatch(r'[0-9a-f]{64}', hashes[name])
+    # The hash check covers .xml; the daily rules archive is deliberately not hashed.
+    assert "$Name -match '\\.(exe|msi|zip|gguf|xml)$'" in install
+    assert not re.search(r'\.(exe|msi|zip|gguf|xml)$', 'emerging.rules.tar.gz')
+
+
+def test_dashboard_port_follows_api_port():
+    install = (WINDOWS / 'install.ps1').read_text(encoding='utf-8')
+    iss = (WINDOWS / 'lighthouse.iss').read_text(encoding='utf-8')
+    write = install.index('Set-Content -LiteralPath "$AppDir\\setup\\api-port.txt" -Value ([int]$config.ApiPort)')
+    assert install.index("throw 'ApiPort must be in 1024..65535.'") < write
+    run = iss[iss.index('[Run]'):iss.index('[UninstallDelete]')]
+    assert '127.0.0.1:8000' not in run and run.count('{code:DashboardUrl}') == 2
+    url = iss[iss.index('function DashboardUrl'):]
+    assert "ExpandConstant('{app}\\setup\\api-port.txt')" in url and 'Port := 8000' in url
+    assert 'Type: files; Name: "{app}\\setup\\api-port.txt"' in iss
+
+
+def test_uninstall_removes_the_update_task_but_stop_only_does_not():
+    uninstall = (WINDOWS / 'uninstall.ps1').read_text(encoding='utf-8')
+    updates = (WINDOWS.parent.parent / 'triage' / 'updates.py').read_text(encoding='utf-8')
+    assert 'TASK_NAME = "LightHouse-Update"' in updates
+    block = uninstall[uninstall.index('if (!$StopOnly) {\n        # "Update now"'):]
+    assert "Unregister-ScheduledTask -TaskName 'LightHouse-Update' -Confirm:$false" in block
+
+
+def test_build_uses_locked_build_backend_and_pinned_compiler():
+    build = (WINDOWS / 'build.ps1').read_text(encoding='utf-8')
+    assert '--no-build-isolation .' in build and '--require-hashes -r "$build\\build-requirements.txt"' in build
+    assert '--no-deps .; Check-Exit' not in build.replace('--no-build-isolation .', '')
+    assert re.search(r'winget install --id JRSoftware\.InnoSetup --exact --version \d+\.\d+\.\d+ ', build)
+    # Old staging folders: only payload-<guid> directly in build\windows, never this build's.
+    cleanup = build[build.index('foreach ($old in'):build.index('New-Item -ItemType Directory')]
+    assert "'^payload-[0-9a-f]{32}$'" in cleanup and '$old.FullName -eq $stage' in cleanup
+    assert 'ReparsePoint' in cleanup and 'rmdir /s /q' in cleanup
+
+
+def test_installer_version_matches_the_package_version():
+    import json
+    import tomllib
+    root = WINDOWS.parent.parent
+    version = tomllib.loads((root / 'pyproject.toml').read_text(encoding='utf-8'))['project']['version']
+    iss = (WINDOWS / 'lighthouse.iss').read_text(encoding='utf-8-sig')
+    assert re.search(r'^#define AppVersion "([^"]+)"', iss, re.M).group(1) == version
+    package = json.loads((root / 'dashboard' / 'package.json').read_text(encoding='utf-8'))
+    lock = json.loads((root / 'dashboard' / 'package-lock.json').read_text(encoding='utf-8'))
+    assert package['version'] == lock['version'] == lock['packages']['']['version'] == version
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='Windows ACL and Authenticode APIs')

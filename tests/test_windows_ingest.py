@@ -55,11 +55,15 @@ def test_platform_configuration(monkeypatch):
     monkeypatch.delenv('LIGHTHOUSE_SURICATA_PATH', raising=False)
     monkeypatch.setenv('LIGHTHOUSE_WAZUH_PATH', '/var/wazuh/alerts.json')
     monkeypatch.setenv('SystemDrive', 'C:')
-    assert main.configured_sources() == {Source.SURICATA: Path(r'C:\Suricata\log\eve.json')}
-    # Windows installed on another drive.
-    monkeypatch.setenv('SystemDrive', 'D:')
-    assert main.configured_sources() == {Source.SURICATA: Path(r'D:\Suricata\log\eve.json')}
-    monkeypatch.setenv('SystemDrive', 'C:')
+    # The default follows the install folder chosen in setup (any drive), never the
+    # system drive; a copy that is not installed has no network sensor unless set.
+    monkeypatch.setattr(main, 'install_root', lambda: Path(r'E:\Apps\LightHouse'))
+    assert main.configured_sources() == {Source.SURICATA: Path(r'E:\Apps\LightHouse\data\suricata\eve.json')}
+    monkeypatch.setattr(main, 'install_root', lambda: None)
+    assert main.configured_sources() == {}
+    monkeypatch.setenv('LIGHTHOUSE_SURICATA_PATH', r'D:\eve.json')
+    assert main.configured_sources() == {Source.SURICATA: Path(r'D:\eve.json')}
+    monkeypatch.delenv('LIGHTHOUSE_SURICATA_PATH')
     monkeypatch.setenv('LIGHTHOUSE_SYSMON_CHANNEL', '')
     monkeypatch.setenv('LIGHTHOUSE_SECURITY_CHANNEL', 'Security')
     assert configured_channels() == ['Security']
@@ -281,6 +285,105 @@ def test_unchanged_health_is_throttled(tmp_path, monkeypatch):
     for value in ('starting', 'ok', 'ok', 'ok', 'error', 'error', 'ok'):
         status.set(value)
     assert writes == ['starting', 'ok', 'error', 'ok']
+
+
+def test_state_directory_follows_the_install_never_programdata(tmp_path, monkeypatch):
+    from triage import paths
+    from triage.ingest import health
+    monkeypatch.delenv('LIGHTHOUSE_EVENT_STATE_DIR', raising=False)
+    monkeypatch.setenv('PROGRAMDATA', str(tmp_path / 'ProgramData'))
+    monkeypatch.setattr(paths, 'install_root', lambda: tmp_path / 'LightHouse')
+    assert health.state_directory() == tmp_path / 'LightHouse' / 'data' / 'state'
+    monkeypatch.setattr(paths, 'install_root', lambda: None)
+    assert 'ProgramData' not in str(health.state_directory())
+    monkeypatch.setenv('LIGHTHOUSE_EVENT_STATE_DIR', str(tmp_path / 'set'))
+    assert health.state_directory() == tmp_path / 'set'
+
+
+def test_status_page_and_readers_share_one_channel_setting(monkeypatch):
+    from triage.ingest.windows import channel_settings
+    monkeypatch.setenv('LIGHTHOUSE_SYSMON_CHANNEL', '')
+    monkeypatch.setenv('LIGHTHOUSE_SECURITY_CHANNEL', ' Security ')
+    assert channel_settings() == (None, 'Security') and configured_channels() == ['Security']
+
+
+def test_suricata_mitre_ids_from_real_and_odd_metadata():
+    def mitre(metadata):
+        return parse_record(Source.SURICATA, {'timestamp': '2026-09-18T12:00:00-0400',
+                                              'alert': {'signature': 'x', 'metadata': metadata}}).mitre
+    # Emerging Threats rules: every metadata value is a list of strings.
+    assert mitre({'mitre_technique_id': ['T1046', 'T1595'], 'mitre_tactic_id': ['TA0007']}) == ['T1046', 'T1595']
+    assert mitre({'mitre': [{'technique_id': 'T1110'}]}) == ['T1110']
+    for odd in (None, ['T1046'], {'mitre': ['T1046']}, {'mitre': None}, {'mitre_technique_id': [5, None]}, 'T1046'):
+        assert mitre(odd) == [], odd
+
+
+@pytest.mark.asyncio
+async def test_eve_reader_survives_records_shaped_to_break_it(tmp_path, caplog):
+    path = tmp_path / 'eve.json'
+    path.touch()
+    reader = tail_windows_json_lines(path, Source.SURICATA)
+    pending = asyncio.create_task(anext(reader))
+    await asyncio.sleep(.6)
+    hostile = ['[1, 2, 3]', '"just a string"', 'null', '{not json',
+               json.dumps({'timestamp': '2026-09-18T12:00:00Z', 'alert': {'signature': 'a', 'metadata': None}}),
+               json.dumps({'timestamp': '2026-09-18T12:00:00Z', 'alert': {'signature': 'b', 'metadata': {'mitre': ['T1046']}}}),
+               json.dumps({'timestamp': '2026-09-18T12:00:00Z', 'alert': ['SECRET-ATTACKER-TEXT']}),
+               json.dumps({'timestamp': '2026-09-18T12:00:00Z', 'alert': {'signature': 'last'}})]
+    with path.open('a', encoding='utf-8') as handle:
+        handle.write('\n'.join(hostile) + '\n')
+    first = await asyncio.wait_for(pending, 3)
+    second = await asyncio.wait_for(anext(reader), 3)
+    third = await asyncio.wait_for(anext(reader), 3)
+    assert [first.title, second.title, third.title] == ['a', 'b', 'last']
+    assert 'SECRET-ATTACKER-TEXT' not in caplog.text
+    await reader.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_failing_reader_is_restarted_and_resumes_where_it_was(tmp_path, monkeypatch):
+    """An error escaping the reader used to end the sensor task, cancel the Event Log
+    readers with it and stop the service; NSSM then restarted at the end of the log."""
+    import triage.main as main
+    import triage.ingest.windows as windows
+    monkeypatch.setattr(sys, 'platform', 'win32')
+    monkeypatch.setattr(main, 'TAIL_RESTART_SECONDS', 0)
+    path = tmp_path / 'eve.json'
+    line = lambda title: json.dumps({'timestamp': '2026-09-18T12:00:00Z', 'alert': {'signature': title}}) + '\n'
+    path.write_text(line('before'))
+    real = windows.tail_windows_json_lines
+    calls = []
+
+    async def flaky(path_, source, position):
+        calls.append(position.offset)
+        async for alert in real(path_, source, position):
+            yield alert
+            if len(calls) == 1:
+                with path.open('a', encoding='utf-8') as handle:
+                    handle.write(line('written while restarting'))
+                raise AttributeError('unforeseen record shape')
+    monkeypatch.setattr(windows, 'tail_windows_json_lines', flaky)
+    seen = []
+
+    class Service:
+        async def process(self, alert):
+            seen.append(alert.title)
+            return len(seen), False
+    # Start following from the end, then add the first record.
+    task = asyncio.create_task(main._tail_source(Service(), Source.SURICATA, path))
+    await asyncio.sleep(.6)
+    with path.open('a', encoding='utf-8') as handle:
+        handle.write(line('first'))
+    for _ in range(100):
+        if len(seen) >= 2:
+            break
+        await asyncio.sleep(.05)
+    assert not task.done(), 'the sensor task keeps running'
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert seen == ['first', 'written while restarting']
+    assert len(calls) == 2 and calls[1] > 0, 'the restart resumed from the last record, not the end'
 
 
 def test_no_windows_channels_expected_off_windows(tmp_path, monkeypatch):

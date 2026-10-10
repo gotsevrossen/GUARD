@@ -12,6 +12,16 @@ try {
             }
         }
     }
+    if (!$StopOnly) {
+        # "Update now" runs setup through a one-time SYSTEM task (TASK_NAME in
+        # triage/updates.py), which the API deletes after the update. Remove one it
+        # never got to; a failure here must not stop the uninstall.
+        try {
+            if (Get-ScheduledTask -TaskName 'LightHouse-Update' -ErrorAction SilentlyContinue) {
+                Unregister-ScheduledTask -TaskName 'LightHouse-Update' -Confirm:$false
+            }
+        } catch { Write-Warning "Could not remove the LightHouse-Update scheduled task: $_" }
+    }
     # Preserve the database, logs, models, sensor software and operator config.
     exit 0
 } catch { Write-Error $_; exit 1 }

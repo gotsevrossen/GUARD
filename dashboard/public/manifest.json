@@ -1,7 +1,7 @@
 {
   "name": "LightHouse",
   "short_name": "LightHouse",
-  "description": "Local AI security copilot. Nothing leaves this computer.",
+  "description": "Local AI security copilot. Monitoring data and alert triage stay on this computer; only the update check and optional GenAI Studio chat go online.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

@@ -1,5 +1,9 @@
 # Purdue GenAI Studio chat (option A): plan and progress
 
+> **Done: shipped in v0.3.1.** Kept as a record of how it was built. Only item 15
+> below is still open. The current behaviour is described in the README and
+> `docs/windows-install.md`.
+
 Chat answers come from Purdue GenAI Studio (`gpt-oss:120b`) when an API key is set;
 alert triage stays local. Purdue failures fall back to the local model. Approved by
 the owner on 2026-10-08, including the privacy change: "alerts stay on this
@@ -35,10 +39,13 @@ API facts (https://docs.rcac.purdue.edu/services/genai/api/): base
       it with `packaging\windows\dev-update.ps1` and runs
       `runtime\python.exe -m triage.cloud_key set` as administrator.
 
-- [x] 8. Admin page "Chat AI" picker (admin only): GPT-OSS 120B, Gemma 4 26B,
-      Llama 3.3 70B, Llama 4, or "On this computer only". `GET /api/chat/models`,
-      `PUT /api/chat/model` (curated list only, 409 without a key), applies on the
-      next question without a restart. Tests in `tests/test_cloud_chat.py`.
+- [x] 8. "Chat AI" default-model picker on the **Settings** page (admin only):
+      **Thinking** (GPT-OSS 120B), **Balanced** (Llama 4), **Quick** (Gemma 4 26B)
+      or **Local (slow)**. `GET /api/chat/models`, `PUT /api/chat/model` (curated
+      list only, 409 without a key), applies on the next question without a
+      restart. Plus a per-question picker beside the chat box's Send button, for
+      everyone, while the default is an online model (it offers no online models
+      while the default is Local (slow)). Tests in `tests/test_cloud_chat.py`.
 
 ## Next batch (requested 2026-10-08)
 
@@ -54,8 +61,10 @@ API facts (https://docs.rcac.purdue.edu/services/genai/api/): base
 - [x] 11. Update check: `triage/updates.py` asks GitHub for the latest release of
       gotsevrossen/LightHouse (cached 15 min, no monitoring data sent), compares with
       the installed version; `GET /api/updates` (admin). Dashboard pops up a native
-      `<dialog>` on every load when newer: "Download update" opens the release page
-      (only that repo's releases URL), "Later" dismisses until the next load.
+      `<dialog>` on every load when newer. **Update now** downloads the release's
+      installer, checks it against the release's SHA-256 file and installs it
+      silently through a one-time SYSTEM scheduled task (`POST /api/updates/install`);
+      **Open release page** is the fallback, and "Later" dismisses until the next load.
 - [x] 12. Tests, docs, full suite + dashboard build.
 - [x] 13. Remove the static green dot above finished LightHouse replies (only the
       animated loader shows while thinking).
@@ -68,19 +77,10 @@ API facts (https://docs.rcac.purdue.edu/services/genai/api/): base
       with "On this computer only"; needs the owner's choice of when it applies.
 
 Progress: 9-14 done: full suite 309+ passing, dashboard builds; docs updated. 15 is explained to the owner (not built: it conflicts with "On this computer only").
-Speed pass (14) added: flash attention with fallback, chat model preload + pre-read 30 s after the API starts (skipped when GenAI Studio answers or monitoring is paused), ingestion model preload at start, shorter triage reasoning. Not done on purpose: prompt-lookup speculative decoding (gain unproven on CPU), quantized KV cache / Q4_0 model (small accuracy cost).
+Speed pass (14) added: flash attention with fallback, chat model preload + pre-read 30 s after the API starts (skipped when GenAI Studio answers or monitoring is paused), ingestion model preload at start, shorter triage reasoning, and prompt-lookup speculative decoding (lossless; on by default, `LIGHTHOUSE_MODEL_SPECULATIVE=0` turns it off). Not done on purpose: quantized KV cache / Q4_0 model (small accuracy cost).
 
-## Also uncommitted from before this plan
+## Status
 
-Warm-up while typing, shorter answers (300 tokens), Zeek/Wazuh wording replaced
-by Suricata/Sysmon/Windows Security. Chat and confidence tests passed; the full
-suite and dashboard build were interrupted and still need a run.
-
-## Where work stopped
-
-2026-10-08: all code steps done and tested; nothing committed yet (this work plus
-the earlier warm-up/shorter-answers/Zeek-Wazuh changes). Remaining, for the owner:
-run `packaging\windows\dev-update.ps1` as administrator, then
-`runtime\python.exe -m triage.cloud_key set` and `Restart-Service LightHouse-API -Force` (then `Start-Service LightHouse-Ingestion`),
-and check chat answers and the footer. Model choice: see
-https://docs.rcac.purdue.edu/services/genai/models/ (default `gpt-oss:120b`).
+Everything above except item 15 shipped in v0.3.1 (warm-up while typing, shorter
+answers and the Suricata/Sysmon/Windows Security wording included) and has been
+committed since. Item 15 remains an open idea for the owner to decide on.

@@ -137,6 +137,20 @@ def save_model(name: str, path: Path | None = None) -> None:
     temporary.replace(path)
 
 
+def _audit(action: str, target: str | None = None) -> None:
+    """Note the change in the Admin page's activity log, as the dashboard's own model
+    switch is: whether chat questions leave this computer is exactly what an admin
+    reviewing that log needs to see. Never the key. Never raises; the change has
+    already been made."""
+    try:
+        from .audit import AuditAction
+        from .db import record_cli_audit
+        from .reset_password import db_path
+        record_cli_audit(db_path(), AuditAction(action), target)
+    except Exception:
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m triage.cloud_key")
     parser.add_argument("command", choices=("set", "status", "clear", "model"))
@@ -154,19 +168,23 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "set":
             saved = save(getpass.getpass("GenAI Studio API key (input hidden): "), path)
-            print(f"Saved, encrypted, to {saved}. Restart the dashboard service: Restart-Service LightHouse-API -Force, "
-                  "then Start-Service LightHouse-Ingestion unless monitoring is paused")
+            _audit("genai_key_set")
+            print(f"Saved, encrypted, to {saved}. Chat uses it from the next question; "
+                  "no restart is needed.")
         elif args.command == "model":
             if not args.name or len(args.name) > 128 or any(ch.isspace() for ch in args.name):
                 print("Give one model name, as listed by GenAI Studio, e.g. gpt-oss:120b", file=sys.stderr)
                 return 1
             save_model(args.name, path.with_name(MODEL_FILE_NAME))
-            print(f"Chat model set to {args.name}. Restart the dashboard service: Restart-Service LightHouse-API -Force, "
-                  "then Start-Service LightHouse-Ingestion unless monitoring is paused")
+            _audit("chat_model_changed", args.name)
+            print(f"Chat model set to {args.name}. Chat uses it from the next question; "
+                  "no restart is needed.")
         elif args.command == "clear":
-            print("Removed." if clear(path) else "No key was set.")
-            print("Restart the dashboard service: Restart-Service LightHouse-API -Force, "
-                  "then Start-Service LightHouse-Ingestion unless monitoring is paused")
+            removed = clear(path)
+            if removed:
+                _audit("genai_key_cleared")
+            print("Removed. Chat stays on this computer from the next question; no restart is needed."
+                  if removed else "No key was set.")
         else:
             print(f"GenAI Studio key: {'configured' if load(path) else 'not configured'} ({path})")
             print(f"Chat model: {configured_model() or 'default'}")

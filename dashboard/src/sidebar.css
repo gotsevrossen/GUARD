@@ -4,15 +4,19 @@
 aside{height:100vh;display:flex;flex-direction:column;
   /* right padding clears the content sheet that laps over this edge */
   padding:22px 56px 28px 20px;color:#eafff6;background:var(--green);overflow-y:auto;
-  /* the rail scrolls once recent chats outgrow the window, but its scrollbar would sit
-     in the strip the sheet laps over: hidden there, and showing through the sheet's
+  /* Recent chats scroll on their own (below), so the rail itself only scrolls as a
+     last resort, in a window too short for even the nav. Its scrollbar would sit in
+     the strip the sheet laps over: hidden there, and showing through the sheet's
      rounded corners as a grey notch where the green should tuck under. Wheel, touch
      and keyboard focus still scroll it. */
   scrollbar-width:none}
 aside::-webkit-scrollbar{display:none}
 /* the toggle wears a nav item's shape, size and hover, and its glyph sits on the
    same centre line as the nav icons, so it reads as part of that column */
-.rail-top{display:flex;justify-content:flex-start;gap:4px;padding-left:3px;margin-bottom:4px}
+.rail-top{position:relative;display:flex;justify-content:flex-start;gap:4px;padding-left:3px;padding-bottom:12px;margin-bottom:16px}
+/* a short floating rule sets the controls apart from the rest of the rail; inset
+   from both ends and in the rail's own divider colour */
+.rail-top::after{content:"";position:absolute;left:14px;right:14px;bottom:0;height:1px;border-radius:1px;background:rgba(255,255,255,.28)}
 /* new chat, pause and shut down sit beside the toggle in exactly its shape, so the
    row reads as one strip of rail controls */
 .collapse,.rail-btn{display:grid;place-items:center;width:44px;height:44px;padding:0;border:0;
@@ -40,14 +44,37 @@ nav button.active{background:#fff;color:var(--green-deep);font-weight:600}
 /* ---- Recent chats: one row per conversation, the way the Claude apps list them.
        Individual messages never appear here; the row is the whole thread, titled
        by how it opened, and clicking it reopens that thread in place. ---- */
-.chats{margin:22px 0 4px;padding-top:18px;border-top:1px solid rgba(255,255,255,.28)}
+/* The section takes the rail's spare height and gives it back first when the window
+   is short: down to a few rows, then the list scrolls inside itself, so the brand,
+   nav and bottom items never move. */
+.chats{display:flex;flex-direction:column;flex:0 1 auto;min-height:130px;margin:22px 0 4px;padding-top:18px;
+  border-top:1px solid rgba(255,255,255,.28)}
 .chats .head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 10px 6px}
 .chats .head span{font-size:.66rem;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:#bfe3d6}
-.chats button.chat{display:flex;align-items:center;gap:9px;width:100%;margin:1px 0;padding:9px 10px;border:0;
+/* a thin scrollbar in the rail's own divider colour, inside the rail (the sheet's
+   lap starts beyond the rail's right padding) */
+.chats .list{min-height:0;overflow-y:auto;overscroll-behavior:contain;
+  scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.35) transparent}
+.chat-row{position:relative;margin:1px 0}
+.chats button.chat{display:flex;align-items:center;gap:9px;width:100%;padding:9px 10px;border:0;
   border-radius:11px;background:transparent;color:#cdeee2;font:inherit;font-size:.82rem;font-weight:400;
   text-align:left;cursor:pointer;transition:background .15s ease,color .15s ease}
-.chats button.chat:hover{background:rgba(255,255,255,.14);color:#fff}
-.chats button.chat.active{background:rgba(255,255,255,.2);color:#fff}
+.chat-row:hover button.chat{background:rgba(255,255,255,.14);color:#fff}
+.chat-row.active button.chat{background:rgba(255,255,255,.2);color:#fff}
+/* Delete sits on the row's right edge, shown while the row is pointed at or has
+   keyboard focus (always on touch screens, which cannot hover). The title makes room
+   for it then, so the two never overlap. */
+.chat-delete{position:absolute;top:50%;right:5px;display:grid;place-items:center;width:28px;height:28px;padding:0;
+  border:0;border-radius:8px;background:transparent;color:#d8f3e9;cursor:pointer;opacity:0;transform:translateY(-50%);
+  transition:opacity .15s ease,background .15s ease,color .15s ease}
+.chat-delete svg{display:block}
+.chat-row:hover .chat-delete,.chat-row:focus-within .chat-delete{opacity:1}
+.chat-delete:hover{background:rgba(255,255,255,.18);color:#fff}
+.chat-row:hover button.chat,.chat-row:focus-within button.chat{padding-right:40px}
+@media (hover:none){
+  .chat-delete{opacity:1}
+  .chats button.chat{padding-right:40px}
+}
 .chats .title{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .chats .mark{flex:0 0 auto;font-size:.8rem;opacity:.8}
 .chats .none{margin:0;padding:5px 10px;font-size:.8rem;color:#a9d6c7}
@@ -56,6 +83,7 @@ nav button.active{background:#fff;color:var(--green-deep);font-weight:600}
 .app.collapsed{grid-template-columns:130px 1fr}
 .app.collapsed aside{padding-left:14px;padding-right:54px}
 .app.collapsed .rail-top{justify-content:center;padding-left:0}
+.app.collapsed .rail-top::after{left:50%;right:auto;width:28px;transform:translateX(-50%)}
 .app.collapsed .brand{justify-content:center;padding:0 0 24px}
 .app.collapsed .brand img{width:52px;height:52px}
 .app.collapsed .brand .txt,.app.collapsed .nav-label{display:none}
@@ -74,8 +102,8 @@ nav button.active{background:#fff;color:var(--green-deep);font-weight:600}
   .brand .txt span{display:none}
   aside nav{display:flex}
   nav button,.app.collapsed nav button{display:block;width:auto;white-space:nowrap}
+  /* Sign out stays: it is the only way out on a narrow window */
   .bottom{margin:0 0 0 auto;padding:0;border:0}
-  .bottom button:last-child{display:none}
   /* below 720px the sidebar is a horizontal bar, so the chat list has nowhere to sit */
   .chats,.app.collapsed .chats{display:none}
 }

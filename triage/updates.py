@@ -28,7 +28,6 @@ import logging
 from pathlib import Path
 import re
 import subprocess
-import sys
 import time
 from typing import Callable
 from urllib.parse import urlsplit
@@ -166,10 +165,8 @@ def _attempt_failed(latest: object, current: str) -> bool:
 def install_dir() -> Path | None:
     """The installed app folder (`<install>\\runtime\\python.exe`), or None when this
     is not the installed service (e.g. a developer's copy), which must not update."""
-    install = Path(sys.executable).resolve().parent.parent
-    if sys.platform != "win32" or not (install / "setup" / "install.ps1").is_file():
-        return None
-    return install
+    from .paths import install_root
+    return install_root()
 
 
 async def _fetch(client: httpx.AsyncClient, url: str, sink: Callable[[bytes], object], limit: int) -> None:

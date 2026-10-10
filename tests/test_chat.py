@@ -14,7 +14,7 @@ from triage.llm import (CHAT_CONTEXT_MAX_ALERTS, CHAT_CONTEXT_MAX_CHARS, CONTEXT
                         EVIDENCE_OPEN, GET_HELP_REMINDER, OPEN_GET_HELP_NOTE, REVIEW_REMINDER, TITLE_SYSTEM_PROMPT,
                         FixtureTriageModel, OllamaTriageModel, TriageModel, clean_title, trim_history)
 from triage.local_model import LlamaCppSettings, LlamaCppTriageModel
-from triage.schema import (AssessedTriage, ChatMessage, Confidence, GuidanceTier, NormalizedAlert, Severity,
+from triage.schema import (DEFAULT_ANSWER_STYLE, AssessedTriage, ChatMessage, Confidence, GuidanceTier, NormalizedAlert, Severity,
                            Source)
 
 OWNER_PASSWORD = "owner-password-1"
@@ -126,7 +126,8 @@ def test_owner_can_chat_and_get_a_title(api, client, model):
     assert response.status_code == 200
     assert response.json() == {"reply": "Here is a short answer.", "available": True}
     call = model.calls[0]
-    assert call["system"] == llm.CHAT_SYSTEM_PROMPT
+    # No notes saved yet: the built-in prompt plus the default answer style.
+    assert call["system"] == llm.compose_chat_system_prompt("", DEFAULT_ANSWER_STYLE)
     assert call["max_tokens"] <= 512 and call["temperature"] == pytest.approx(0.3)
     assert call["messages"][-1]["role"] == "user" and "Is my network ok?" in call["messages"][-1]["content"]
 
@@ -260,6 +261,41 @@ def test_unfocused_context_is_open_alerts_help_first_and_capped(api, client, mod
     # The open get-help alert comes first even though it is the oldest.
     assert fenced.index("Old-But-Urgent-Marker") < fenced.index("Recent-")
     assert help_id
+
+
+def test_get_help_alert_stays_in_context_under_high_volume(api, client, model):
+    """Context used to be picked from the newest 100 open alerts, so a busy sensor
+    pushed an older get-help alert out of what the model was told."""
+    old = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    seed(api, tier=GuidanceTier.GET_HELP, title="Buried-Get-Help-Marker", timestamp=old)
+    for index in range(130):
+        seed(api, title=f"Routine-{index}", source_event_id=str(index))
+    alerts = api._chat_alerts(None)
+    assert len(alerts) == CHAT_CONTEXT_MAX_ALERTS
+    assert alerts[0].title == "Buried-Get-Help-Marker"
+    # The rest are the newest routine alerts, newest first.
+    assert [alert.title for alert in alerts[1:]] == [f"Routine-{index}" for index in range(129, 129 - CHAT_CONTEXT_MAX_ALERTS + 1, -1)]
+
+
+def test_concurrent_first_questions_build_one_local_runtime(api, monkeypatch):
+    """chat_model() runs on the event loop and in worker threads at once."""
+    import threading
+    import time
+    import triage.main as main
+    built = []
+
+    def slow_build(mock):
+        built.append(mock)
+        time.sleep(0.2)
+        return FakeChatModel()
+    monkeypatch.setattr(main, "build_model", slow_build)
+    results = []
+    threads = [threading.Thread(target=lambda: results.append(api.chat_model())) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert len(built) == 1 and len({id(result) for result in results}) == 1
 
 
 # --- code-side cautions ----------------------------------------------------------
@@ -715,7 +751,7 @@ def test_warm_reads_exactly_the_opening_the_next_question_starts_with(api, clien
     response = client.post("/api/chat/warm", headers=auth(token), json={"alert_id": alert_id})
     assert response.status_code == 200 and response.json() == {"warmed": True}
     warmed = fake.warmed[-1]
-    assert warmed["system"] == CHAT_SYSTEM_PROMPT
+    assert warmed["system"] == llm.compose_chat_system_prompt("", DEFAULT_ANSWER_STYLE)
     ask(client, token, alert_id=alert_id)
     asked = fake.calls[-1]["messages"]
     # The question's prompt begins with the warmed turns, so only the question is new.

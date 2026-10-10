@@ -14,17 +14,22 @@ REAL_INSTALLED_VERSION = updates.installed_version
 
 
 class FakeServices:
-    def __init__(self, state="running", fail=False, denied=False):
+    def __init__(self, state="running", fail=False, denied=False, start="automatic"):
         self.states = {name: state for name in monitoring.MONITORING_SERVICES}
+        self.starts = {name: start for name in monitoring.MONITORING_SERVICES}
         self.calls, self.fail, self.denied = [], fail, denied
 
     def state(self, name):
         return self.states.get(name)
 
+    def start_type(self, name):
+        return self.starts.get(name)
+
     def set_automatic(self, name, automatic):
         if self.denied:
             raise PermissionError("not allowed to change Windows services")
         self.calls.append(("auto" if automatic else "manual", name))
+        self.starts[name] = "automatic" if automatic else "manual"
 
     def stop(self, name):
         if self.fail:
@@ -78,6 +83,9 @@ def test_only_admins_pause_and_everyone_sees_the_state(api, monkeypatch):
     services = FakeServices()
     monkeypatch.setattr(api, "_services", services)
     monkeypatch.setattr(api, "_local_chat_model", object())
+    # A per-question GenAI Studio pick holds the local runtime as its fallback.
+    api._picked_chat_models["gemma4:26b-a4b"] = object()
+    monkeypatch.setattr(api, "_chat_built_for", ("key", "gpt-oss:120b"))
     client = TestClient(api.app)
     owner, admin = headers(api, client, "owner1", "owner"), headers(api, client, "boss", "admin")
     assert client.get("/api/monitoring", headers=owner).json()["paused"] is False
@@ -85,6 +93,7 @@ def test_only_admins_pause_and_everyone_sees_the_state(api, monkeypatch):
     paused = client.post("/api/monitoring", headers=admin, json={"paused": True})
     assert paused.status_code == 200 and paused.json()["paused"] is True
     assert api._local_chat_model is None, "pausing frees the chat AI's memory"
+    assert api._picked_chat_models == {} and api._chat_built_for is None, "nothing still holds the runtime"
     assert client.get("/api/monitoring", headers=owner).json()["paused"] is True
     assert client.post("/api/monitoring", headers=admin, json={"paused": False}).json()["paused"] is False
 
@@ -97,7 +106,7 @@ def test_pause_errors_are_reported_not_raised(api, monkeypatch):
     monkeypatch.setattr(api, "_services", FakeServices(fail=True))
     assert client.post("/api/monitoring", headers=admin, json={"paused": True}).status_code == 502
     # A hand-started copy (not the SYSTEM service) gets told why, not "try again".
-    monkeypatch.setattr(api, "_services", FakeServices(state="stopped", denied=True))
+    monkeypatch.setattr(api, "_services", FakeServices(state="stopped", start="manual", denied=True))
     denied = client.post("/api/monitoring", headers=admin, json={"paused": False})
     assert denied.status_code == 403 and "installed LightHouse app" in denied.json()["detail"]
 
@@ -293,11 +302,26 @@ def test_shut_down_stops_everything_and_opening_again_restores_it(tmp_path):
 
 
 def test_shut_down_while_paused_comes_back_paused(tmp_path):
-    services, marker = FakeServices(state="stopped"), tmp_path / "shutdown.json"
+    services, marker = FakeServices(state="stopped", start="manual"), tmp_path / "shutdown.json"
     monitoring.shutdown(services, marker)
     services.calls.clear()
     monitoring.restore_after_shutdown(services, marker)
     assert services.calls == [("auto", "LightHouse-API")]
+
+
+def test_stopped_without_a_pause_is_not_paused_and_comes_back_after_a_shut_down(tmp_path):
+    """Services set to start automatically but stopped (a crash, someone stopping
+    them) are broken, not paused by an administrator; a shut down must not keep
+    them off afterwards."""
+    services, marker = FakeServices(state="stopped"), tmp_path / "shutdown.json"
+    assert monitoring.status(services)["paused"] is False
+    monitoring.shutdown(services, marker)
+    services.calls.clear()
+    monitoring.restore_after_shutdown(services, marker)
+    assert ("start", "LightHouse-Ingestion") in services.calls and ("start", "LightHouse-Suricata") in services.calls
+    # Disabled by hand is not LightHouse's pause either.
+    assert monitoring.status(FakeServices(state="stopped", start="disabled"))["paused"] is False
+    assert monitoring.status(FakeServices(state="stopped", start="manual"))["paused"] is True
 
 
 def test_a_failed_shut_down_puts_things_back(tmp_path):
@@ -313,13 +337,14 @@ def test_only_admins_shut_down_and_the_api_stops_itself_last(api, tmp_path, monk
     monkeypatch.setattr(api, "_shutdown_marker", lambda: tmp_path / "shutdown.json")
     monkeypatch.setattr(api, "SHUTDOWN_STOP_DELAY_SECONDS", 0)
     monkeypatch.setattr(api, "_local_chat_model", object())
+    api._picked_chat_models["gemma4:26b-a4b"] = object()
     client = TestClient(api.app)
     owner, admin = headers(api, client, "owner1", "owner"), headers(api, client, "boss", "admin")
     assert client.post("/api/shutdown", headers=owner).status_code == 403
     assert services.calls == []
     assert client.post("/api/shutdown", headers=admin).status_code == 202
     assert services.calls[-1] == ("request-stop", "LightHouse-API")
-    assert api._local_chat_model is None, "the chat AI is let go at once"
+    assert api._local_chat_model is None and api._picked_chat_models == {}, "the chat AI is let go at once"
     # A hand-started copy cannot shut the installed services down.
     monkeypatch.setattr(api, "_shutdown_marker", lambda: None)
     assert client.post("/api/shutdown", headers=admin).status_code == 403

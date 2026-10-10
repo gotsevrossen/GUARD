@@ -1,5 +1,7 @@
 # Missing deployment information
 
+> **Legacy (Linux appliance era); not current.** This document describes the original Linux appliance plan and is kept for history only. LightHouse is now Windows-only; see [windows-install.md](windows-install.md) and the README for the current product.
+
 These items do not block code scaffolding, but they block a validated appliance deployment.
 
 1. **Linux VM** — distro/version, CPU/RAM/disk, and whether it has a dedicated monitoring NIC.

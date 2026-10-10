@@ -3,11 +3,18 @@
 # in the dashboard, every LightHouse service is stopped; this starts LightHouse-API
 # again (setup lets interactive users start that one service, nothing more) and the
 # API itself, as SYSTEM, turns monitoring back on. Ingestion and Suricata are never
-# started from here. The script takes no input, so nothing in it can be steered, and
-# it runs from the install folder, which only administrators can change.
+# started from here. The script takes no user input, so nothing in it can be steered:
+# it runs from the install folder, which only administrators can change, and its one
+# setting (the port) comes from api-port.txt beside it, written by setup from the
+# admin-only windows.json and accepted only as a port number.
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$dashboard = 'http://127.0.0.1:8000'
+$port = 8000
+try {
+    $saved = (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'api-port.txt') -TotalCount 1).Trim()
+    if ($saved -match '^\d{4,5}$' -and [int]$saved -ge 1024 -and [int]$saved -le 65535) { $port = [int]$saved }
+} catch { }
+$dashboard = "http://127.0.0.1:$port"
 
 function Test-Ready {
     try { return (Invoke-WebRequest "$dashboard/health" -UseBasicParsing -TimeoutSec 2).StatusCode -eq 200 }

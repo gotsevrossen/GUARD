@@ -31,8 +31,15 @@ triage/                 Python backend (FastAPI + ingestion + triage)
   llm.py                Prompt building, untrusted-evidence fencing, TriageModel ABC, fixture model (Ollama model is legacy)
   local_model.py        llama.cpp runtime (lazy load, retry, AVX2 check, installer CLI)
   service.py            Pipeline: dedupe → model → sensor severity floor → store
-  db.py                 SQLite (WAL): users, sessions, alerts, preferences
+  db.py                 SQLite (WAL): users, sessions, alerts, preferences, activity log
   dedupe.py             Duplicate suppression
+  audit.py              Admin activity log vocabulary (fixed actions; alerts named by id only)
+  guidance.py           Owner guidance tier from final severity + confidence (fixed banners)
+  cloud_key.py          GenAI Studio key, DPAPI-encrypted in the data folder (`python -m triage.cloud_key`)
+  cloud_model.py        GenAI Studio chat model (chat only; falls back to local; triage stays local)
+  monitoring.py         Pause/resume monitoring and shut down (Windows services)
+  updates.py            GitHub release check + "Update now" (SHA-256-verified, one-time SYSTEM task)
+  reset_password.py     Admin CLI: replace a lost password
   ingest/readers.py     Suricata / Wazuh-shape parsers + tailers (Zeek parts are legacy)
   ingest/windows.py     Windows Event Log reader (Sysmon + Security) → Wazuh-shaped alerts
   ingest/health.py      Ingestion health for analyst views
@@ -43,13 +50,24 @@ dashboard/              React 18 + TypeScript + Vite (no UI library)
   src/main.tsx          Whole app: login, home, alerts, trends, advanced, settings, admin, chat
   src/api.ts            Fetch wrapper, session storage
   src/conversations.ts  Chat history (localStorage only)
+  src/notifications.ts  Desktop alerts: polls /api/notifications while open, fixed wording only
   src/styles.css        Design tokens + layout (signed-off frame)
   src/sidebar.css       Sidebar rules
-packaging/windows/      build.ps1, install.ps1, lighthouse.iss, security.ps1, configure_suricata.py, dependency-hashes.json
+packaging/windows/      Windows installer:
+  lighthouse.iss        Inno Setup script (folder checks, ACL lock, shortcuts, runs install.ps1)
+  install.ps1           Dependency setup + NSSM services (runs elevated after files are copied)
+  security.ps1          ACL, ownership, hash and signature guards shared by setup and tests
+  uninstall.ps1         Stops/removes services (also -StopOnly before an upgrade)
+  open-lighthouse.ps1   Dashboard shortcut: starts LightHouse-API if shut down, opens the window
+  configure_suricata.py, disable_failed_rules.py   Suricata YAML generation; disables rules the engine can't parse
+  dependency-hashes.json  Pinned SHA-256 of installer downloads
+  build.ps1             Builds dist/LightHouse-Setup.exe; dev-update.ps1 pushes a checkout into an install (dev only)
+  make-installer-art.ps1, art/   Installer icon and wizard images
 packaging/              Legacy Linux packaging (build-deb.sh, systemd, monitoring-stack installer), PyInstaller spec
 samples/                Fixture records for Suricata, Zeek, Wazuh
 tests/                  pytest suite (+ windows_security.ps1)
-docs/                   windows-install.md, implementation-log.md, missing-information.md, backend-completion-requirements.md
+docs/                   windows-install.md (current); purdue-chat-plan.md (GenAI Studio chat, shipped v0.3.1);
+                        implementation-log.md, missing-information.md, backend-completion-requirements.md (legacy Linux-appliance era)
 *-ui-frame.html         Static design references for the dashboard frame (lighthouse-ui-frame.html is current)
 ```
 
@@ -113,16 +131,17 @@ The frame was signed off. **Match it strictly.** Reuse the existing tokens, comp
 - **Resilience:** parse localStorage defensively (`safeParse`); corrupt storage must never white-screen the app.
 - **Chat** ("Ask LightHouse"): see below.
 
-## Chat ("Ask LightHouse") — planned work
+## Chat ("Ask LightHouse")
 
-Currently a front-end stub (`setTimeout` placeholder in `main.tsx`, history in localStorage via `conversations.ts`). The goal is to **wire it to the same on-device model** used for triage.
+Wired up and shipped. History stays in the browser's localStorage (`conversations.ts`); the backend lives in `api.py` and `llm.py`.
 
-- Answers come from the local llama.cpp runtime, or from Purdue GenAI Studio only when the owner stored a key (see the exception at the top). No other cloud API.
-- Add a backend route (e.g. `POST /api/chat`) behind `require(*ALL_ROLES)`. Reuse the loaded model behind the model abstraction instead of loading a second copy.
-- Any alert data included as context is attacker-controlled: fence it with the same `<untrusted_evidence>` handling as `build_prompt`, and cap its length.
-- Respect roles: an owner's chat context must not include `raw`, `rule_id` or `reasoning`.
-- Write answers for a non-technical owner. Handle "model unavailable / no AVX2" with a clear message, not an error screen.
-- Inference is CPU-only and slow; keep the existing typing indicator and don't block the UI.
+- **Routes** (all behind `require(*ALL_ROLES)` unless noted): `POST /api/chat` and `POST /api/chat/stream` (newline-delimited JSON events) answer; `POST /api/chat/warm` pre-reads the prompt while the user types; `POST /api/chat/title` names a chat; `GET /api/chat/provider` says local or GenAI Studio (for the footer); `GET /api/chat/models` and `PUT /api/chat/model` read and set the default model (admin only).
+- **Where answers come from:** the local llama.cpp runtime behind the `TriageModel` interface (the API process reuses one loaded model; the GGUF is memory-mapped and shared with ingestion), or Purdue GenAI Studio only when an admin stored a key (see the exception at the top). No other cloud API. GenAI failures fall back to the local model.
+- **Choosing a model:** admins set the default in Settings → Chat AI (Thinking / Balanced / Quick / Local (slow)); anyone may pick another for one question with the picker beside Send, unless the default is Local (slow), which offers no online models.
+- Any alert data included as context is attacker-controlled: it is fenced with the same `<untrusted_evidence>` handling as `build_prompt` and length-capped. Keep it that way.
+- Respect roles: chat context is built from `AlertDetailOwner` (no `raw`, `rule_id` or `reasoning`), for every role.
+- Answers are for a non-technical owner. "Model unavailable / no AVX2" gives a clear message, not an error screen. Fixed "get help" reminders are added by code above the AI's answer.
+- Inference is CPU-only and slow; keep the typing indicator and don't block the UI.
 
 ## Code style
 
@@ -150,4 +169,4 @@ When a prompt has several parts, split them across parallel subagents instead of
 - Clean-machine Windows install, repair and upgrade testing are still outstanding.
 - Free Npcap can't install silently (interactive wizard). Fully unattended setup needs preinstalled Npcap or the OEM installer.
 - `samples/` are format-faithful starters, not real captured events.
-- See `docs/missing-information.md` and `docs/backend-completion-requirements.md` for open decisions.
+- `docs/missing-information.md` and `docs/backend-completion-requirements.md` are legacy Linux-appliance notes, kept for history; current Windows details are in `docs/windows-install.md`.
